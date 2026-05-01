@@ -1,27 +1,92 @@
-<div class="video-container">
-  <video
-    #videoPlayer
-    (timeupdate)="onTimeUpdate()"
-    src="https://test-videos.co.uk/vids/bigbuckbunny/mp4/av1/360/Big_Buck_Bunny_360_10s_1MB.mp4"
-    controls
-  ></video>
-  <ko-stage #annotationStage [config]="videoDims()" [class.drawing-active]="isDrawingMode()" (mousedown)="handleMouseDown($event)">
-    <ko-layer [config]="layerConfig()">
-      @for (p of polygonConfigs(); track $index) {
-        <ko-line [config]="p"></ko-line>
-      }
-    </ko-layer>
-    <ko-layer>
-      @for (l of labelConfigs(); track $index) {
-        <ko-text [config]="l"></ko-text>
-      }
-    </ko-layer>
-    @if (lassoLineConfig(); as cfg) {
-      <ko-layer>
-        <ko-line [config]="cfg"></ko-line>
-      </ko-layer>
-    }
-  </ko-stage>
-</div>
+<div class="app-layout">
+  <div class="main-content">
+    <div class="video-container">
+      <video
+        #videoPlayer
+        (timeupdate)="onTimeUpdate()"
+        src="https://test-videos.co.uk/vids/bigbuckbunny/mp4/av1/360/Big_Buck_Bunny_360_10s_1MB.mp4"
+        controls
+      ></video>
+      <ko-stage #annotationStage [config]="videoDims()" [class.drawing-active]="isDrawingMode()" (mousedown)="handleMouseDown($event)">
+        <ko-layer [config]="layerConfig()">
+          @for (p of polygonConfigs(); track $index) {
+            <ko-line [config]="p"></ko-line>
+          }
+        </ko-layer>
+        <ko-layer>
+          @for (l of labelConfigs(); track $index) {
+            <ko-text [config]="l"></ko-text>
+          }
+        </ko-layer>
+        @if (lassoLineConfig(); as cfg) {
+          <ko-layer>
+            <ko-line [config]="cfg"></ko-line>
+          </ko-layer>
+        }
+      </ko-stage>
+    </div>
 
-<button (click)="toggleDrawingMode()">Toggle Drawing Mode</button>
+    <button class="toggle-btn" (click)="toggleDrawingMode()">
+      {{ isDrawingMode() ? 'Exit Annotation Mode' : 'Enter Annotation Mode' }}
+    </button>
+
+    @if (hoveredAnnotation(); as a) {
+      <div class="hover-tooltip" [style.left.px]="mousePos().x + 12" [style.top.px]="mousePos().y + 12">
+        <strong>{{ a.mistakeType === 'Unspecified' ? '' : a.mistakeType }}</strong>
+        @if (a.comment) { <div class="tooltip-comment">{{ a.comment }}</div> }
+      </div>
+    }
+  </div>
+
+  <aside class="sidebar">
+    @if (selectedAnnotation(); as a) {
+      <div class="edit-panel">
+        <div class="edit-panel-header">
+          <span class="edit-panel-id">{{ a.label }}</span>
+          <span class="edit-panel-time">{{ formatTime(a.timestamp) }}</span>
+        </div>
+
+        <label for="mistakeType">Mistake Type</label>
+        <select
+          id="mistakeType"
+          (change)="onTypeChange(a.id, $any($event.target).value)"
+        >
+          @for (t of MISTAKE_TYPES; track t) {
+            <option [value]="t" [selected]="editType() === t">{{ t }}</option>
+          }
+        </select>
+
+        <label for="comment">Comment</label>
+        <textarea
+          id="comment"
+          rows="3"
+          [value]="editComment()"
+          (input)="onCommentInput(a.id, $any($event.target).value)"
+          placeholder="Optional comment..."
+        ></textarea>
+
+        <div class="edit-panel-actions">
+          <button class="btn-jump" (click)="jumpToAnnotation(a.id)">Jump to timestamp</button>
+          <button class="btn-delete" (click)="deleteAnnotation(a.id)">Delete</button>
+        </div>
+      </div>
+    }
+
+    <div class="annotation-list">
+      <h3 class="sidebar-title">All Annotations</h3>
+      @if (sortedAnnotations().length === 0) {
+        <p class="empty-hint">No annotations yet. Draw a lasso to create one.</p>
+      }
+      @for (a of sortedAnnotations(); track a.id) {
+        <div
+          class="annotation-item"
+          [class.selected]="selectedAnnotationId() === a.id"
+          (click)="selectAnnotation(a.id)"
+        >
+          <span class="annotation-type">{{ a.mistakeType === 'Unspecified' ? '—' : a.mistakeType }}</span>
+          <span class="annotation-time">{{ formatTime(a.timestamp) }}</span>
+        </div>
+      }
+    </div>
+  </aside>
+</div>

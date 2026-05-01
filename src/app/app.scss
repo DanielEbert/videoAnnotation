@@ -1,5 +1,174 @@
+.app-layout {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.main-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.sidebar {
+  width: 280px;
+  min-width: 280px;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  display: flex;
+  flex-direction: column;
+  border-left: 2px solid #16213e;
+  overflow: hidden;
+}
+
+// ── sidebar edit panel ──
+
+.edit-panel {
+  padding: 12px 16px;
+  border-bottom: 2px solid #16213e;
+  background: #0d0d1f;
+  flex-shrink: 0;
+
+  label {
+    display: block;
+    font-size: 11px;
+    color: #808098;
+    margin: 8px 0 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  select, textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px 8px;
+    background: #16213e;
+    color: #e0e0e0;
+    border: 1px solid #0f3460;
+    border-radius: 4px;
+    font-size: 13px;
+    font-family: inherit;
+
+    &:focus {
+      outline: none;
+      border-color: #4a90d9;
+    }
+  }
+
+  select { cursor: pointer; }
+  textarea { resize: vertical; min-height: 54px; }
+}
+
+.edit-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 6px;
+}
+
+.edit-panel-id {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.edit-panel-time {
+  font-size: 12px;
+  color: #707090;
+}
+
+.edit-panel-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+
+  button {
+    flex: 1;
+    padding: 6px 0;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+}
+
+// ── annotation list ──
+
+.annotation-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.sidebar-title {
+  margin: 0;
+  padding: 10px 16px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #808098;
+  background: #111128;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.empty-hint {
+  padding: 16px;
+  color: #606080;
+  font-size: 12px;
+  text-align: center;
+  font-style: italic;
+}
+
+.annotation-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 16px;
+  cursor: pointer;
+  border-bottom: 1px solid #16213e;
+  font-size: 13px;
+  transition: background 0.15s;
+
+  &:hover { background: #16213e; }
+  &.selected { background: #0f3460; color: #fff; }
+}
+
+.annotation-type {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  margin-right: 8px;
+}
+
+.annotation-time {
+  color: #707090;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+// ── buttons ──
+
+.btn-jump {
+  background: #0f3460;
+  color: #e0e0e0;
+  &:hover { background: #1a4a80; }
+}
+
+.btn-delete {
+  background: #6b2020;
+  color: #e0a0a0;
+  &:hover { background: #8b3030; }
+}
+
+// ── video ──
 .video-container {
   position: relative;
+  flex: 1;
+  min-height: 200px;
 }
 
 video, ko-stage {
@@ -25,4 +194,42 @@ ko-stage.drawing-active {
   pointer-events: auto;
   cursor: crosshair;
   user-select: none;
+}
+
+.toggle-btn {
+  display: block;
+  margin: 8px 10px;
+  padding: 6px 16px;
+  background: #16213e;
+  color: #e0e0e0;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  align-self: flex-start;
+
+  &:hover { background: #0f3460; }
+}
+
+// ── tooltip ──
+.hover-tooltip {
+  position: fixed;
+  z-index: 999;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  max-width: 220px;
+  line-height: 1.4;
+
+  strong { font-size: 13px; }
+}
+
+.tooltip-comment {
+  margin-top: 2px;
+  color: #ccc;
+  font-size: 11px;
+  word-break: break-word;
 }
