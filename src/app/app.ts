@@ -208,35 +208,25 @@ export class App {
 
   // ── hover / click detection ──
 
-  private checkAnnotationHover(sx: number, sy: number) {
+  private findAnnotationAtScreen(sx: number, sy: number): PolygonAnnotation | undefined {
     const pose = this.carPose();
-    for (const a of this.annotations()) {
-      const screenVerts = a.worldVertices.map(v => {
-        const s = this.worldToScreen(v.worldX, v.worldY, pose);
-        return { x: s.x, y: s.y };
-      });
-      if (this.pointInPolygon(sx, sy, screenVerts)) {
-        this.hoveredAnnotationId.set(a.id);
-        return;
-      }
-    }
-    this.hoveredAnnotationId.set(null);
-  }
-
-  private handleAnnotationClick(sx: number, sy: number) {
-    const pose = this.carPose();
-    const matched = this.annotations().find(a => {
+    return this.annotations().find(a => {
       const screenVerts = a.worldVertices.map(v => {
         const s = this.worldToScreen(v.worldX, v.worldY, pose);
         return { x: s.x, y: s.y };
       });
       return this.pointInPolygon(sx, sy, screenVerts);
     });
-    if (matched) {
-      this.selectAnnotation(matched.id);
-    } else {
-      this.clearSelection();
-    }
+  }
+
+  private checkAnnotationHover(sx: number, sy: number) {
+    const found = this.findAnnotationAtScreen(sx, sy);
+    this.hoveredAnnotationId.set(found?.id ?? null);
+  }
+
+  private handleAnnotationClick(sx: number, sy: number) {
+    const matched = this.findAnnotationAtScreen(sx, sy);
+    matched ? this.selectAnnotation(matched.id) : this.clearSelection();
   }
 
   // ── annotation selection ──
