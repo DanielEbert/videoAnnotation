@@ -71,8 +71,10 @@ export class App {
   layerConfig = computed(() => {
     const { width, height } = this.videoDims();
     const { worldX, worldY, yaw } = this.carPose();
-    return { x: width / 2, y: height / 2, offsetX: worldX, offsetY: worldY,
-      scaleX: this.pixelsPerMeter, scaleY: this.pixelsPerMeter, rotation: -yaw * 180 / Math.PI };
+    return {
+      x: width / 2, y: height / 2, offsetX: worldX, offsetY: worldY,
+      scaleX: this.pixelsPerMeter, scaleY: this.pixelsPerMeter, rotation: -yaw * 180 / Math.PI
+    };
   });
 
   polygonConfigs = computed(() => {
@@ -255,7 +257,7 @@ export class App {
     this.editComment.set('');
   }
 
-  // ── annotation field updates (auto-save) ──
+  // ── annotation field updates ──
 
   onTypeChange(id: number, type: string) {
     this.editType.set(type);
@@ -311,6 +313,24 @@ export class App {
       clearTimeout(this._commentTimer);
       this._saveComment();
     }
+  }
+
+  // ── export / import ──
+
+  exportAnnotations() {
+    const json = JSON.stringify(this.annotations(), null, 2);
+    navigator.clipboard.writeText(json).catch(() => { });
+  }
+
+  async importAnnotations() {
+    try {
+      const text = await navigator.clipboard.readText();
+      const data = JSON.parse(text) as PolygonAnnotation[];
+      if (!Array.isArray(data)) return;
+      this._nextId = Math.max(0, ...data.map(a => a.id)) + 1;
+      this.annotations.set(data);
+      this.clearSelection();
+    } catch { /* invalid json or clipboard read failed */ }
   }
 
   // ── helpers ──
