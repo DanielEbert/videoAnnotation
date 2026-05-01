@@ -227,32 +227,24 @@ export class App {
   @HostListener('window:mousedown', ['$event'])
   onWindowMouseDown(e: MouseEvent) {
     if (e.button === 1) {
-      const rect = this.annotationStage?.nativeElement?.getBoundingClientRect();
-      if (!rect) return;
-      const sx = e.clientX - rect.left;
-      const sy = e.clientY - rect.top;
-      const vd = this.videoDims();
-      if (sx < 0 || sy < 0 || sx > vd.width || sy > vd.height) return;
+      const pos = this._screenCoordsInStage(e);
+      if (!pos) return;
       e.preventDefault();
-      this._deleteLassoStart = { x: sx, y: sy };
-      this.deleteLassoPoints.set([{ x: sx, y: sy }]);
+      this._deleteLassoStart = pos;
+      this.deleteLassoPoints.set([pos]);
       return;
     }
     if (e.button !== 2) return;
-    const rect = this.annotationStage?.nativeElement?.getBoundingClientRect();
-    if (!rect) return;
-    const sx = e.clientX - rect.left;
-    const sy = e.clientY - rect.top;
-    const vd = this.videoDims();
-    if (sx < 0 || sy < 0 || sx > vd.width || sy > vd.height) return;
-    const found = this.findAnnotationAtScreen(sx, sy);
+    const pos = this._screenCoordsInStage(e);
+    if (!pos) return;
+    const found = this.findAnnotationAtScreen(pos.x, pos.y);
     if (!found) return;
     e.preventDefault();
     this._flushCommentDebounce();
     this.pushState();
     this.selectAnnotation(found.id);
     this._draggingAnnotationId = found.id;
-    this.dragStartScreen.set({ x: sx, y: sy });
+    this.dragStartScreen.set(pos);
     this._dragStartWorldVertices = JSON.parse(JSON.stringify(found.worldVertices));
   }
 
@@ -381,65 +373,30 @@ export class App {
     const timestamp = this.videoEl.currentTime;
 
     if (e.shiftKey) {
-      const newPolygon: Polygon = [worldVerts.map((v) => [v.worldX, v.worldY] as Pair)];
+      const newPolygon = this._toPolygon(worldVerts);
       const targetId = this._findBestMergeTarget(newPolygon);
       if (targetId !== null) {
         this.pushState();
         this.annotations.update((arr) =>
           arr.map((a) => {
             if (a.id !== targetId) return a;
-            const existing: Polygon = [
-              a.worldVertices.map((v) => [v.worldX, v.worldY] as Pair),
-            ];
+            const existing = this._toPolygon(a.worldVertices);
             try {
               const merged: MultiPolygon = polygonClipping.union(existing, newPolygon);
               if (merged.length > 0) {
-                const ring = merged[0][0];
-                return {
-                  ...a,
-                  worldVertices: ring.map(([wx, wy]) => ({ worldX: wx, worldY: wy })),
-                };
+                return { ...a, worldVertices: this._ringToVertices(merged[0][0]) };
               }
-            } catch {
-              // union failed, merge by appending as-is
-            }
-            return {
-              ...a,
-              worldVertices: [...a.worldVertices, ...worldVerts],
-            };
+            } catch {}
+            return { ...a, worldVertices: [...a.worldVertices, ...worldVerts] };
           }),
         );
         this.selectAnnotation(targetId);
       } else {
-        const id = this._nextId++;
-        this.pushState();
-        this.annotations.update((arr) => [
-          ...arr,
-          {
-            id,
-            worldVertices: worldVerts,
-            label: `#${id}`,
-            mistakeType: 'Unspecified',
-            comment: '',
-            timestamp,
-          },
-        ]);
+        const id = this._createAnnotation(worldVerts, timestamp);
         this.selectAnnotation(id);
       }
     } else {
-      const id = this._nextId++;
-      this.pushState();
-      this.annotations.update((arr) => [
-        ...arr,
-        {
-          id,
-          worldVertices: worldVerts,
-          label: `#${id}`,
-          mistakeType: 'Unspecified',
-          comment: '',
-          timestamp,
-        },
-      ]);
+      const id = this._createAnnotation(worldVerts, timestamp);
       this.selectAnnotation(id);
     }
     this.lassoPoints.set([]);
@@ -504,9 +461,9 @@ export class App {
   private findAnnotationAtScreen(sx: number, sy: number): PolygonAnnotation | undefined {
     const pose = this.carPose();
     return this.annotations().find((a) => {
-      const screenVerts = a.worldVertices.map((v) => {
+      const screenVerts: Pair[] = a.worldVertices.map((v) => {
         const s = this.worldToScreen(v.worldX, v.worldY, pose);
-        return { x: s.x, y: s.y };
+        return [s.x, s.y];
       });
       return this.pointInPolygon(sx, sy, screenVerts);
     });
@@ -712,41 +669,25 @@ export class App {
   // ── delete polygon (middle mouse) ──
 
   private _applyDeletePolygon(deleteWorldVerts: { worldX: number; worldY: number }[]) {
-    const clipPolygon: Polygon = [deleteWorldVerts.map((v) => [v.worldX, v.worldY] as Pair)];
+    const clipPolygon = this._toPolygon(deleteWorldVerts);
     const toDelete: number[] = [];
     const toReplace: { id: number; worldVertices: { worldX: number; worldY: number }[] }[] = [];
     const newAnnotations: PolygonAnnotation[] = [];
 
     for (const a of this.annotations()) {
-      const subjectPolygon: Polygon = [
-        a.worldVertices.map((v) => [v.worldX, v.worldY] as Pair),
-      ];
-
-      // check if there is any overlap before computing difference
+      const subjectPolygon = this._toPolygon(a.worldVertices);
       if (!this._polygonsIntersect(subjectPolygon, clipPolygon)) continue;
-
       try {
         const result: MultiPolygon = polygonClipping.difference(subjectPolygon, clipPolygon);
-
         if (result.length === 0) {
-          // fully enclosed — delete the annotation
           toDelete.push(a.id);
-        } else if (result.length === 1) {
-          const ring = result[0][0];
-          const newVerts = ring.map(([wx, wy]) => ({ worldX: wx, worldY: wy }));
-          toReplace.push({ id: a.id, worldVertices: newVerts });
         } else {
-          // multiple resulting polygons — keep one for original id, new for rest
-          const ring = result[0][0];
-          const verts0 = ring.map(([wx, wy]) => ({ worldX: wx, worldY: wy }));
-          toReplace.push({ id: a.id, worldVertices: verts0 });
+          toReplace.push({ id: a.id, worldVertices: this._ringToVertices(result[0][0]) });
           for (let i = 1; i < result.length; i++) {
-            const ringI = result[i][0];
-            const vertsI = ringI.map(([wx, wy]) => ({ worldX: wx, worldY: wy }));
             const newId = this._nextId++;
             newAnnotations.push({
               id: newId,
-              worldVertices: vertsI,
+              worldVertices: this._ringToVertices(result[i][0]),
               label: `#${newId}`,
               mistakeType: a.mistakeType,
               comment: a.comment,
@@ -754,13 +695,10 @@ export class App {
             });
           }
         }
-      } catch {
-        // if difference fails, skip this annotation
-      }
+      } catch {}
     }
 
     if (toDelete.length === 0 && toReplace.length === 0 && newAnnotations.length === 0) return;
-
     this.pushState();
     this.annotations.update((arr) => {
       let result = arr.filter((a) => !toDelete.includes(a.id));
@@ -770,7 +708,6 @@ export class App {
       });
       return [...result, ...newAnnotations];
     });
-
     if (toDelete.includes(this.selectedAnnotationId()!)) this.clearSelection();
   }
 
@@ -779,34 +716,20 @@ export class App {
   private _findBestMergeTarget(newPolygon: Polygon): number | null {
     const newArea = this._polygonArea(newPolygon[0]);
     if (newArea <= 0) return null;
-
     let bestId: number | null = null;
     let bestRatio = 0;
 
     for (const a of this.annotations()) {
-      const existing: Polygon = [
-        a.worldVertices.map((v) => [v.worldX, v.worldY] as Pair),
-      ];
-
+      const existing = this._toPolygon(a.worldVertices);
       if (!this._polygonsIntersect(existing, newPolygon)) continue;
-
       try {
         const overlap = polygonClipping.intersection(existing, newPolygon);
         let overlapArea = 0;
-        for (const poly of overlap) {
-          overlapArea += this._polygonArea(poly[0]);
-        }
+        for (const poly of overlap) overlapArea += this._polygonArea(poly[0]);
         const ratio = overlapArea / newArea;
-        if (ratio > bestRatio) {
-          bestRatio = ratio;
-          bestId = a.id;
-        }
-      } catch {
-        // skip
-      }
+        if (ratio > bestRatio) { bestRatio = ratio; bestId = a.id; }
+      } catch {}
     }
-
-    // require at least 5% overlap for a merge
     return bestRatio > 0.05 ? bestId : null;
   }
 
@@ -821,59 +744,69 @@ export class App {
   }
 
   private _polygonsIntersect(a: Polygon, b: Polygon): boolean {
-    const aPts = a[0];
-    const bPts = b[0];
-
-    // fast bounding box check
-    const aMinX = Math.min(...aPts.map((p) => p[0]));
-    const aMaxX = Math.max(...aPts.map((p) => p[0]));
-    const aMinY = Math.min(...aPts.map((p) => p[1]));
-    const aMaxY = Math.max(...aPts.map((p) => p[1]));
-    const bMinX = Math.min(...bPts.map((p) => p[0]));
-    const bMaxX = Math.max(...bPts.map((p) => p[0]));
-    const bMinY = Math.min(...bPts.map((p) => p[1]));
-    const bMaxY = Math.max(...bPts.map((p) => p[1]));
-
-    if (aMaxX < bMinX || aMinX > bMaxX || aMaxY < bMinY || aMinY > bMaxY) return false;
-
-    // check if any vertex of a is inside b or vice versa
-    for (const [px, py] of aPts) {
-      if (this._pointInPolygonWorld(px, py, bPts)) return true;
-    }
-    for (const [px, py] of bPts) {
-      if (this._pointInPolygonWorld(px, py, aPts)) return true;
-    }
-
+    const [aPts, bPts] = [a[0], b[0]];
+    const bb = (pts: Pair[]) => ({
+      minX: Math.min(...pts.map((p) => p[0])),
+      maxX: Math.max(...pts.map((p) => p[0])),
+      minY: Math.min(...pts.map((p) => p[1])),
+      maxY: Math.max(...pts.map((p) => p[1])),
+    });
+    const ba = bb(aPts);
+    const bb2 = bb(bPts);
+    if (ba.maxX < bb2.minX || ba.minX > bb2.maxX || ba.maxY < bb2.minY || ba.minY > bb2.maxY)
+      return false;
+    for (const [px, py] of aPts) if (this.pointInPolygon(px, py, bPts)) return true;
+    for (const [px, py] of bPts) if (this.pointInPolygon(px, py, aPts)) return true;
     return false;
   }
 
-  private _pointInPolygonWorld(
-    px: number,
-    py: number,
-    vertices: Pair[],
-  ): boolean {
+  // helpers
+
+  private _toPolygon(verts: { worldX: number; worldY: number }[]): Polygon {
+    return [verts.map((v) => [v.worldX, v.worldY] as Pair)];
+  }
+
+  private _ringToVertices(ring: Pair[]): { worldX: number; worldY: number }[] {
+    return ring.map(([wx, wy]) => ({ worldX: wx, worldY: wy }));
+  }
+
+  private _createAnnotation(
+    worldVerts: { worldX: number; worldY: number }[],
+    timestamp: number,
+  ): number {
+    const id = this._nextId++;
+    this.pushState();
+    this.annotations.update((arr) => [
+      ...arr,
+      {
+        id,
+        worldVertices: worldVerts,
+        label: `#${id}`,
+        mistakeType: 'Unspecified',
+        comment: '',
+        timestamp,
+      },
+    ]);
+    return id;
+  }
+
+  private _screenCoordsInStage(e: MouseEvent): { x: number; y: number } | null {
+    const rect = this.annotationStage?.nativeElement?.getBoundingClientRect();
+    if (!rect) return null;
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    const vd = this.videoDims();
+    if (sx < 0 || sy < 0 || sx > vd.width || sy > vd.height) return null;
+    return { x: sx, y: sy };
+  }
+
+  private pointInPolygon(px: number, py: number, vertices: Pair[]): boolean {
     let inside = false;
     for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
       const xi = vertices[i][0],
         yi = vertices[i][1];
       const xj = vertices[j][0],
         yj = vertices[j][1];
-      if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) {
-        inside = !inside;
-      }
-    }
-    return inside;
-  }
-
-  // helpers
-
-  private pointInPolygon(px: number, py: number, vertices: { x: number; y: number }[]): boolean {
-    let inside = false;
-    for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
-      const xi = vertices[i].x,
-        yi = vertices[i].y;
-      const xj = vertices[j].x,
-        yj = vertices[j].y;
       if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) {
         inside = !inside;
       }
