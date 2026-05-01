@@ -300,6 +300,16 @@ export class App {
       return;
     }
 
+    if (e.key.startsWith('Arrow')) {
+      const a = this.editPanelAnnotation();
+      if (!a) return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      e.preventDefault();
+      this.nudgeAnnotation(a.id, e.key, e.shiftKey);
+      return;
+    }
+
     if (e.key === 'Delete' || e.key === 'Backspace') {
       const a = this.editPanelAnnotation();
       if (!a) return;
@@ -311,8 +321,10 @@ export class App {
     }
 
     if (/^[0-9]$/.test(e.key)) {
-      const a = this.editPanelAnnotation();
+      const a = this.hoveredAnnotation();
       if (!a) return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       e.preventDefault();
       const idx = e.key === '0' ? 9 : parseInt(e.key) - 1;
       if (idx >= 0 && idx < MISTAKE_TYPES.length) {
@@ -381,11 +393,53 @@ export class App {
     }, 300);
   }
 
+  nudgeAnnotation(id: number, key: string, shiftKey: boolean) {
+    const pixelStep = shiftKey ? 1 : 5;
+    let screenDx = 0, screenDy = 0;
+    if (key === 'ArrowUp') screenDy = -pixelStep;
+    else if (key === 'ArrowDown') screenDy = pixelStep;
+    else if (key === 'ArrowLeft') screenDx = -pixelStep;
+    else if (key === 'ArrowRight') screenDx = pixelStep;
+
+    if (screenDx === 0 && screenDy === 0) return;
+
+    const yaw = this.carPose().yaw;
+    const cos = Math.cos(yaw);
+    const sin = Math.sin(yaw);
+    const ppm = this.pixelsPerMeter;
+    const worldDx = (screenDx * cos - screenDy * sin) / ppm;
+    const worldDy = (screenDx * sin + screenDy * cos) / ppm;
+
+    this.pushState();
+    this.annotations.update(arr => arr.map(a => {
+      if (a.id !== id) return a;
+      return {
+        ...a,
+        worldVertices: a.worldVertices.map(v => ({
+          worldX: v.worldX + worldDx,
+          worldY: v.worldY + worldDy,
+        })),
+      };
+    }));
+  }
+
   deleteAnnotation(id: number) {
     this._flushCommentDebounce();
     this.pushState();
     if (this.selectedAnnotationId() === id) this.clearSelection();
     this.annotations.update(arr => arr.filter(a => a.id !== id));
+  }
+
+  onTimestampChange(id: number, value: string) {
+    const seconds = this.parseTimestamp(value);
+    if (isNaN(seconds)) return;
+    const existing = this.annotations().find(x => x.id === id);
+    if (!existing || existing.timestamp === seconds) return;
+    this._flushCommentDebounce();
+    this.pushState();
+    this.annotations.update(arr => arr.map(a =>
+      a.id === id ? { ...a, timestamp: seconds } : a
+    ));
   }
 
   jumpToAnnotation(id: number) {
@@ -482,6 +536,17 @@ export class App {
       }
     }
     return inside;
+  }
+
+  private parseTimestamp(value: string): number {
+    const trimmed = value.trim();
+    const colonMatch = trimmed.match(/^(\d+):(\d{1,2})$/);
+    if (colonMatch) {
+      return parseInt(colonMatch[1]) * 60 + parseInt(colonMatch[2]);
+    }
+    const num = parseFloat(trimmed);
+    if (!isNaN(num) && num >= 0) return num;
+    return NaN;
   }
 
   private getCarPositionAtTime(time: number): CarPose {

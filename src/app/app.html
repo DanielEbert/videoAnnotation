@@ -44,7 +44,11 @@
       <div class="edit-panel">
         <div class="edit-panel-header">
           <span class="edit-panel-id">{{ a.label }}</span>
-          <span class="edit-panel-time">{{ formatTime(a.timestamp) }}</span>
+          <input
+            class="edit-panel-time"
+            [value]="formatTime(a.timestamp)"
+            (change)="onTimestampChange(a.id, $any($event.target).value)"
+          />
         </div>
 
         <div class="mistake-label">Mistake Type</div>
