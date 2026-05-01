@@ -20,6 +20,7 @@
     "concaveman": "^2.0.0",
     "konva": "^10.3.0",
     "ng2-konva": "^12.0.0",
+    "polygon-clipping": "^0.15.7",
     "rxjs": "~7.8.0",
     "tslib": "^2.3.0"
   },

@@ -23,6 +23,11 @@
             <ko-line [config]="cfg"></ko-line>
           </ko-layer>
         }
+        @if (deleteLassoLineConfig(); as cfg) {
+          <ko-layer>
+            <ko-line [config]="cfg"></ko-line>
+          </ko-layer>
+        }
       </ko-stage>
     </div>
 

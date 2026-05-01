@@ -9,6 +9,8 @@ import {
 } from '@angular/core';
 import concaveman from 'concaveman';
 import { CoreShapeComponent, StageComponent } from 'ng2-konva';
+import polygonClipping from 'polygon-clipping';
+import type { Pair, Polygon, MultiPolygon } from 'polygon-clipping';
 
 interface CarPose {
   timestamp: number;
@@ -66,6 +68,10 @@ export class App {
 
   private _lassoStart: { x: number; y: number } | null = null;
   lassoPoints = signal<{ x: number; y: number }[]>([]);
+  shiftKeyDown = signal(false);
+
+  private _deleteLassoStart: { x: number; y: number } | null = null;
+  deleteLassoPoints = signal<{ x: number; y: number }[]>([]);
 
   private _draggingAnnotationId: number | null = null;
   dragStartScreen = signal<{ x: number; y: number } | null>(null);
@@ -132,14 +138,31 @@ export class App {
   lassoLineConfig = computed(() => {
     const pts = this.lassoPoints();
     if (pts.length < 2) return null;
+    const mergeMode = this.shiftKeyDown();
     return {
       points: pts.flatMap((p) => [p.x, p.y]),
       closed: true,
-      fill: 'rgba(0,255,255,0.15)',
-      stroke: 'rgba(0,255,255,0.6)',
+      fill: mergeMode ? 'rgba(0,200,100,0.20)' : 'rgba(0,255,255,0.15)',
+      stroke: mergeMode ? 'rgba(0,200,100,0.7)' : 'rgba(0,255,255,0.6)',
       strokeWidth: 2,
       lineCap: 'round',
       lineJoin: 'round',
+      dash: mergeMode ? [6, 3] : undefined,
+    };
+  });
+
+  deleteLassoLineConfig = computed(() => {
+    const pts = this.deleteLassoPoints();
+    if (pts.length < 2) return null;
+    return {
+      points: pts.flatMap((p) => [p.x, p.y]),
+      closed: true,
+      fill: 'rgba(255,40,40,0.18)',
+      stroke: 'rgba(255,80,80,0.65)',
+      strokeWidth: 2,
+      lineCap: 'round',
+      lineJoin: 'round',
+      dash: [6, 3],
     };
   });
 
@@ -193,7 +216,7 @@ export class App {
 
   handleMouseDown(e: any) {
     if (!this.isDrawingMode()) return;
-    if (e.event.evt?.button === 2) return;
+    if (e.event.evt?.button === 1 || e.event.evt?.button === 2) return;
     const pos = e.event.currentTarget.getPointerPosition();
     if (!pos) return;
     e.event.evt?.preventDefault();
@@ -203,6 +226,18 @@ export class App {
 
   @HostListener('window:mousedown', ['$event'])
   onWindowMouseDown(e: MouseEvent) {
+    if (e.button === 1) {
+      const rect = this.annotationStage?.nativeElement?.getBoundingClientRect();
+      if (!rect) return;
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      const vd = this.videoDims();
+      if (sx < 0 || sy < 0 || sx > vd.width || sy > vd.height) return;
+      e.preventDefault();
+      this._deleteLassoStart = { x: sx, y: sy };
+      this.deleteLassoPoints.set([{ x: sx, y: sy }]);
+      return;
+    }
     if (e.button !== 2) return;
     const rect = this.annotationStage?.nativeElement?.getBoundingClientRect();
     if (!rect) return;
@@ -268,13 +303,19 @@ export class App {
     }
 
     const lassoStart = this._lassoStart;
-    if (lassoStart === null) return;
+    if (lassoStart !== null) {
+      this.lassoPoints.update((pts) => [...pts, { x: stageX, y: stageY }]);
+      return;
+    }
 
-    this.lassoPoints.update((pts) => [...pts, { x: stageX, y: stageY }]);
+    const deleteLassoStart = this._deleteLassoStart;
+    if (deleteLassoStart !== null) {
+      this.deleteLassoPoints.update((pts) => [...pts, { x: stageX, y: stageY }]);
+    }
   }
 
-  @HostListener('window:mouseup')
-  onWindowMouseUp() {
+  @HostListener('window:mouseup', ['$event'])
+  onWindowMouseUp(e: MouseEvent) {
     if (this.dragStartScreen() !== null) {
       const dragged = this.annotations().find((a) => a.id === this._draggingAnnotationId);
       if (
@@ -292,6 +333,26 @@ export class App {
       }
       this.dragStartScreen.set(null);
       this._draggingAnnotationId = null;
+      return;
+    }
+
+    const deleteLassoStart = this._deleteLassoStart;
+    if (deleteLassoStart !== null) {
+      this._deleteLassoStart = null;
+      const pts = this.deleteLassoPoints();
+      this.deleteLassoPoints.set([]);
+
+      const anyMoved = pts.some(
+        (p) => Math.abs(p.x - deleteLassoStart.x) > 3 || Math.abs(p.y - deleteLassoStart.y) > 3,
+      );
+      if (!anyMoved || pts.length < 3) return;
+
+      const hull = concaveman(pts.map((p) => [p.x, p.y]));
+      if (hull.length < 3) return;
+
+      const pose = this.carPose();
+      const deleteWorldVerts = hull.map(([x, y]) => this.screenToWorld(x, y, pose));
+      this._applyDeletePolygon(deleteWorldVerts);
       return;
     }
 
@@ -317,27 +378,78 @@ export class App {
     const hull = concaveman(pts.map((p) => [p.x, p.y]));
     const pose = this.carPose();
     const worldVerts = hull.map(([x, y]) => this.screenToWorld(x, y, pose));
-    const id = this._nextId++;
     const timestamp = this.videoEl.currentTime;
-    this.pushState();
-    this.annotations.update((arr) => [
-      ...arr,
-      {
-        id,
-        worldVertices: worldVerts,
-        label: `#${id}`,
-        mistakeType: 'Unspecified',
-        comment: '',
-        timestamp,
-      },
-    ]);
+
+    if (e.shiftKey) {
+      const newPolygon: Polygon = [worldVerts.map((v) => [v.worldX, v.worldY] as Pair)];
+      const targetId = this._findBestMergeTarget(newPolygon);
+      if (targetId !== null) {
+        this.pushState();
+        this.annotations.update((arr) =>
+          arr.map((a) => {
+            if (a.id !== targetId) return a;
+            const existing: Polygon = [
+              a.worldVertices.map((v) => [v.worldX, v.worldY] as Pair),
+            ];
+            try {
+              const merged: MultiPolygon = polygonClipping.union(existing, newPolygon);
+              if (merged.length > 0) {
+                const ring = merged[0][0];
+                return {
+                  ...a,
+                  worldVertices: ring.map(([wx, wy]) => ({ worldX: wx, worldY: wy })),
+                };
+              }
+            } catch {
+              // union failed, merge by appending as-is
+            }
+            return {
+              ...a,
+              worldVertices: [...a.worldVertices, ...worldVerts],
+            };
+          }),
+        );
+        this.selectAnnotation(targetId);
+      } else {
+        const id = this._nextId++;
+        this.pushState();
+        this.annotations.update((arr) => [
+          ...arr,
+          {
+            id,
+            worldVertices: worldVerts,
+            label: `#${id}`,
+            mistakeType: 'Unspecified',
+            comment: '',
+            timestamp,
+          },
+        ]);
+        this.selectAnnotation(id);
+      }
+    } else {
+      const id = this._nextId++;
+      this.pushState();
+      this.annotations.update((arr) => [
+        ...arr,
+        {
+          id,
+          worldVertices: worldVerts,
+          label: `#${id}`,
+          mistakeType: 'Unspecified',
+          comment: '',
+          timestamp,
+        },
+      ]);
+      this.selectAnnotation(id);
+    }
     this.lassoPoints.set([]);
     this._lassoStart = null;
-    this.selectAnnotation(id);
   }
 
   @HostListener('window:keydown', ['$event'])
   onKeyDown(e: KeyboardEvent) {
+    if (e.key === 'Shift') this.shiftKeyDown.set(true);
+
     if (e.ctrlKey || e.metaKey) {
       if (e.key === 'z' && !e.shiftKey) {
         e.preventDefault();
@@ -380,6 +492,11 @@ export class App {
         this.onTypeChange(a.id, MISTAKE_TYPES[idx]);
       }
     }
+  }
+
+  @HostListener('window:keyup', ['$event'])
+  onKeyUp(e: KeyboardEvent) {
+    if (e.key === 'Shift') this.shiftKeyDown.set(false);
   }
 
   // ── hover / click detection ──
@@ -590,6 +707,162 @@ export class App {
     } catch {
       /* invalid json or clipboard read failed */
     }
+  }
+
+  // ── delete polygon (middle mouse) ──
+
+  private _applyDeletePolygon(deleteWorldVerts: { worldX: number; worldY: number }[]) {
+    const clipPolygon: Polygon = [deleteWorldVerts.map((v) => [v.worldX, v.worldY] as Pair)];
+    const toDelete: number[] = [];
+    const toReplace: { id: number; worldVertices: { worldX: number; worldY: number }[] }[] = [];
+    const newAnnotations: PolygonAnnotation[] = [];
+
+    for (const a of this.annotations()) {
+      const subjectPolygon: Polygon = [
+        a.worldVertices.map((v) => [v.worldX, v.worldY] as Pair),
+      ];
+
+      // check if there is any overlap before computing difference
+      if (!this._polygonsIntersect(subjectPolygon, clipPolygon)) continue;
+
+      try {
+        const result: MultiPolygon = polygonClipping.difference(subjectPolygon, clipPolygon);
+
+        if (result.length === 0) {
+          // fully enclosed — delete the annotation
+          toDelete.push(a.id);
+        } else if (result.length === 1) {
+          const ring = result[0][0];
+          const newVerts = ring.map(([wx, wy]) => ({ worldX: wx, worldY: wy }));
+          toReplace.push({ id: a.id, worldVertices: newVerts });
+        } else {
+          // multiple resulting polygons — keep one for original id, new for rest
+          const ring = result[0][0];
+          const verts0 = ring.map(([wx, wy]) => ({ worldX: wx, worldY: wy }));
+          toReplace.push({ id: a.id, worldVertices: verts0 });
+          for (let i = 1; i < result.length; i++) {
+            const ringI = result[i][0];
+            const vertsI = ringI.map(([wx, wy]) => ({ worldX: wx, worldY: wy }));
+            const newId = this._nextId++;
+            newAnnotations.push({
+              id: newId,
+              worldVertices: vertsI,
+              label: `#${newId}`,
+              mistakeType: a.mistakeType,
+              comment: a.comment,
+              timestamp: a.timestamp,
+            });
+          }
+        }
+      } catch {
+        // if difference fails, skip this annotation
+      }
+    }
+
+    if (toDelete.length === 0 && toReplace.length === 0 && newAnnotations.length === 0) return;
+
+    this.pushState();
+    this.annotations.update((arr) => {
+      let result = arr.filter((a) => !toDelete.includes(a.id));
+      result = result.map((a) => {
+        const r = toReplace.find((x) => x.id === a.id);
+        return r ? { ...a, worldVertices: r.worldVertices } : a;
+      });
+      return [...result, ...newAnnotations];
+    });
+
+    if (toDelete.includes(this.selectedAnnotationId()!)) this.clearSelection();
+  }
+
+  // ── merge polygon (shift + left mouse) ──
+
+  private _findBestMergeTarget(newPolygon: Polygon): number | null {
+    const newArea = this._polygonArea(newPolygon[0]);
+    if (newArea <= 0) return null;
+
+    let bestId: number | null = null;
+    let bestRatio = 0;
+
+    for (const a of this.annotations()) {
+      const existing: Polygon = [
+        a.worldVertices.map((v) => [v.worldX, v.worldY] as Pair),
+      ];
+
+      if (!this._polygonsIntersect(existing, newPolygon)) continue;
+
+      try {
+        const overlap = polygonClipping.intersection(existing, newPolygon);
+        let overlapArea = 0;
+        for (const poly of overlap) {
+          overlapArea += this._polygonArea(poly[0]);
+        }
+        const ratio = overlapArea / newArea;
+        if (ratio > bestRatio) {
+          bestRatio = ratio;
+          bestId = a.id;
+        }
+      } catch {
+        // skip
+      }
+    }
+
+    // require at least 5% overlap for a merge
+    return bestRatio > 0.05 ? bestId : null;
+  }
+
+  private _polygonArea(vertices: Pair[]): number {
+    let area = 0;
+    for (let i = 0; i < vertices.length; i++) {
+      const j = (i + 1) % vertices.length;
+      area += vertices[i][0] * vertices[j][1];
+      area -= vertices[j][0] * vertices[i][1];
+    }
+    return Math.abs(area) / 2;
+  }
+
+  private _polygonsIntersect(a: Polygon, b: Polygon): boolean {
+    const aPts = a[0];
+    const bPts = b[0];
+
+    // fast bounding box check
+    const aMinX = Math.min(...aPts.map((p) => p[0]));
+    const aMaxX = Math.max(...aPts.map((p) => p[0]));
+    const aMinY = Math.min(...aPts.map((p) => p[1]));
+    const aMaxY = Math.max(...aPts.map((p) => p[1]));
+    const bMinX = Math.min(...bPts.map((p) => p[0]));
+    const bMaxX = Math.max(...bPts.map((p) => p[0]));
+    const bMinY = Math.min(...bPts.map((p) => p[1]));
+    const bMaxY = Math.max(...bPts.map((p) => p[1]));
+
+    if (aMaxX < bMinX || aMinX > bMaxX || aMaxY < bMinY || aMinY > bMaxY) return false;
+
+    // check if any vertex of a is inside b or vice versa
+    for (const [px, py] of aPts) {
+      if (this._pointInPolygonWorld(px, py, bPts)) return true;
+    }
+    for (const [px, py] of bPts) {
+      if (this._pointInPolygonWorld(px, py, aPts)) return true;
+    }
+
+    return false;
+  }
+
+  private _pointInPolygonWorld(
+    px: number,
+    py: number,
+    vertices: Pair[],
+  ): boolean {
+    let inside = false;
+    for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
+      const xi = vertices[i][0],
+        yi = vertices[i][1];
+      const xj = vertices[j][0],
+        yj = vertices[j][1];
+      if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) {
+        inside = !inside;
+      }
+    }
+    return inside;
   }
 
   // helpers
