@@ -1,4 +1,4 @@
-import { Component, computed, ElementRef, HostListener, signal, ViewChild } from '@angular/core';
+import { Component, computed, effect, ElementRef, HostListener, signal, ViewChild } from '@angular/core';
 import concaveman from 'concaveman';
 import { CoreShapeComponent, StageComponent } from 'ng2-konva';
 
@@ -87,13 +87,15 @@ export class App {
 
   polygonConfigs = computed(() => {
     const selId = this.selectedAnnotationId();
+    const hoverId = this.hoveredAnnotationId();
     return this.annotations().map(a => {
       const isSel = a.id === selId;
+      const isHover = a.id === hoverId;
       return {
         points: a.worldVertices.flatMap(v => [v.worldX, v.worldY]),
         closed: true,
-        fill: isSel ? 'rgba(255,255,0,0.25)' : 'rgba(255,0,0,0.15)',
-        stroke: isSel ? 'rgba(255,255,0,0.9)' : 'rgba(255,0,0,0.7)',
+        fill: isSel ? 'rgba(255,255,0,0.25)' : isHover ? 'rgba(255,255,255,0.10)' : 'rgba(255,0,0,0.15)',
+        stroke: isSel ? 'rgba(255,255,0,0.9)' : isHover ? 'rgba(200,200,255,0.5)' : 'rgba(255,0,0,0.7)',
         strokeWidth: isSel ? 3 / this.pixelsPerMeter : 2 / this.pixelsPerMeter,
       };
     });
@@ -135,7 +137,27 @@ export class App {
   canUndo = computed(() => { this._historyVersion(); return this.undoStack.length > 0; });
   canRedo = computed(() => { this._historyVersion(); return this.redoStack.length > 0; });
 
+  editPanelAnnotation = computed(() => {
+    const hovered = this.hoveredAnnotationId();
+    const selected = this.selectedAnnotationId();
+    const id = hovered ?? selected;
+    return id !== null ? this.annotations().find(a => a.id === id) ?? null : null;
+  });
+
   // ── lifecycle ──
+
+  constructor() {
+    effect(() => {
+      const a = this.editPanelAnnotation();
+      if (a) {
+        this.editType.set(a.mistakeType);
+        this.editComment.set(a.comment);
+      } else {
+        this.editType.set('');
+        this.editComment.set('');
+      }
+    });
+  }
 
   ngAfterViewInit() {
     this.videoEl = this.videoPlayer.nativeElement;
@@ -228,6 +250,17 @@ export class App {
         e.preventDefault();
         this.redo();
       }
+      return;
+    }
+
+    if (/^[0-9]$/.test(e.key)) {
+      const a = this.editPanelAnnotation();
+      if (!a) return;
+      e.preventDefault();
+      const idx = e.key === '0' ? 9 : parseInt(e.key) - 1;
+      if (idx >= 0 && idx < MISTAKE_TYPES.length) {
+        this.onTypeChange(a.id, MISTAKE_TYPES[idx]);
+      }
     }
   }
 
@@ -275,6 +308,8 @@ export class App {
   // ── annotation field updates ──
 
   onTypeChange(id: number, type: string) {
+    const existing = this.annotations().find(x => x.id === id);
+    if (!existing || existing.mistakeType === type) return;
     this.pushState();
     this.editType.set(type);
     const label = type !== 'Unspecified' ? `${type} #${id}` : `#${id}`;

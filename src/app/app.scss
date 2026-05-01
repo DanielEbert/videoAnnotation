@@ -39,6 +39,72 @@
     letter-spacing: 0.5px;
   }
 
+  .mistake-label {
+    font-size: 11px;
+    color: #808098;
+    margin: 8px 0 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .mistake-type-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 280px;
+    overflow-y: auto;
+  }
+
+  .mistake-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    color: #a0a0c0;
+    transition: background 0.1s, color 0.1s;
+
+    &:hover {
+      background: #16213e;
+      color: #e0e0e0;
+    }
+
+    &.active {
+      background: #0f3460;
+      color: #fff;
+    }
+  }
+
+  .keybind {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+    font-size: 11px;
+    font-family: monospace;
+    background: #2a2a4a;
+    color: #8098b8;
+    border: 1px solid #3a3a5a;
+    border-radius: 3px;
+    line-height: 1;
+
+    .mistake-option.active & {
+      background: #4a90d9;
+      color: #fff;
+      border-color: #5aa0e9;
+    }
+  }
+
+  .type-label {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   select, textarea {
     width: 100%;
     box-sizing: border-box;

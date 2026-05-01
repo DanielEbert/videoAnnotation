@@ -39,27 +39,31 @@
   </div>
 
   <aside class="sidebar">
-    @if (selectedAnnotation(); as a) {
+    @if (editPanelAnnotation(); as a) {
       <div class="edit-panel">
         <div class="edit-panel-header">
           <span class="edit-panel-id">{{ a.label }}</span>
           <span class="edit-panel-time">{{ formatTime(a.timestamp) }}</span>
         </div>
 
-        <label for="mistakeType">Mistake Type</label>
-        <select
-          id="mistakeType"
-          (change)="onTypeChange(a.id, $any($event.target).value)"
-        >
-          @for (t of MISTAKE_TYPES; track t) {
-            <option [value]="t" [selected]="editType() === t">{{ t }}</option>
+        <div class="mistake-label">Mistake Type</div>
+        <div class="mistake-type-list">
+          @for (t of MISTAKE_TYPES; track t; let i = $index) {
+            <div
+              class="mistake-option"
+              [class.active]="a.mistakeType === t"
+              (click)="onTypeChange(a.id, t)"
+            >
+              <kbd class="keybind">{{ i === 9 ? 0 : i + 1 }}</kbd>
+              <span class="type-label">{{ t }}</span>
+            </div>
           }
-        </select>
+        </div>
 
         <label for="comment">Comment</label>
         <textarea
           id="comment"
-          rows="3"
+          rows="2"
           [value]="editComment()"
           (input)="onCommentInput(a.id, $any($event.target).value)"
           placeholder="Optional comment..."
