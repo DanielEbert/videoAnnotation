@@ -5,7 +5,23 @@
     src="https://test-videos.co.uk/vids/bigbuckbunny/mp4/av1/360/Big_Buck_Bunny_360_10s_1MB.mp4"
     controls
   ></video>
-  <canvas #annotationCanvas [class.drawing-active]="isDrawingMode" (mousedown)="handleCanvasClick($event)"></canvas>
+  <ko-stage #annotationStage [config]="stageConfig()" [class.drawing-active]="isDrawingMode()" (mousedown)="handleMouseDown($event)">
+    <ko-layer [config]="layerConfig()">
+      @for (p of polygonConfigs(); track $index) {
+        <ko-line [config]="p"></ko-line>
+      }
+    </ko-layer>
+    <ko-layer>
+      @for (l of labelConfigs(); track $index) {
+        <ko-text [config]="l"></ko-text>
+      }
+    </ko-layer>
+    @if (lassoLineConfig(); as cfg) {
+      <ko-layer>
+        <ko-line [config]="cfg"></ko-line>
+      </ko-layer>
+    }
+  </ko-stage>
 </div>
 
 <button (click)="toggleDrawingMode()">Toggle Drawing Mode</button>

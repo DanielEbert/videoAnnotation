@@ -1,5 +1,7 @@
-import { Component, ElementRef, HostListener, signal, ViewChild } from '@angular/core';
+import { Component, computed, ElementRef, HostListener, signal, ViewChild } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
+import concaveman from 'concaveman';
+import { CoreShapeComponent, StageComponent } from 'ng2-konva';
 
 interface CarPose {
   timestamp: number;
@@ -8,180 +10,196 @@ interface CarPose {
   yaw: number;
 }
 
-interface PointAnnotation {
-  worldX: number;
-  worldY: number;
+interface PolygonAnnotation {
+  worldVertices: { worldX: number; worldY: number }[];
   label: string;
 }
 
 @Component({
   selector: 'app-root',
-  imports: [RouterOutlet],
+  imports: [RouterOutlet, StageComponent, CoreShapeComponent],
   templateUrl: './app.html',
   styleUrl: './app.scss',
 })
 export class App {
   @ViewChild('videoPlayer') videoPlayer!: ElementRef<HTMLVideoElement>;
-  @ViewChild('annotationCanvas') annotationCanvas!: ElementRef<HTMLCanvasElement>;
+  @ViewChild('annotationStage', { read: ElementRef }) annotationStage!: ElementRef<HTMLDivElement>;
 
   private videoEl!: HTMLVideoElement;
-  private canvasEl!: HTMLCanvasElement;
-  private ctx!: CanvasRenderingContext2D;
-
-  // TODO
   private pixelsPerMeter = 100;
 
-  public isDrawingMode = true;
+  isDrawingMode = signal(true);
+  annotations = signal<PolygonAnnotation[]>([]);
+  carPose = signal<CarPose>({ timestamp: 0, worldX: 50, worldY: 50, yaw: 0 });
+  videoDims = signal({ w: 640, h: 360 });
 
-  private annotations = [];
+  isLassoing = signal(false);
+  lassoPoints = signal<{ x: number; y: number }[]>([]);
+
+  stageConfig = computed(() => ({
+    width: this.videoDims().w,
+    height: this.videoDims().h,
+  }));
+
+  layerConfig = computed(() => {
+    const d = this.videoDims();
+    const p = this.carPose();
+    return {
+      x: d.w / 2,
+      y: d.h / 2,
+      offsetX: p.worldX,
+      offsetY: p.worldY,
+      scaleX: this.pixelsPerMeter,
+      scaleY: this.pixelsPerMeter,
+      rotation: -p.yaw * 180 / Math.PI,
+    };
+  });
+
+  polygonConfigs = computed(() =>
+    this.annotations().map(a => {
+      const pts: number[] = [];
+      for (const v of a.worldVertices) {
+        pts.push(v.worldX, v.worldY);
+      }
+      return {
+        points: pts,
+        closed: true,
+        fill: 'rgba(255,0,0,0.15)',
+        stroke: 'rgba(255,0,0,0.7)',
+        strokeWidth: 2 / this.pixelsPerMeter,
+      };
+    })
+  );
+
+  labelConfigs = computed(() => {
+    const p = this.carPose();
+    return this.annotations().map(a => {
+      const c = this.polygonCentroid(a.worldVertices);
+      const s = this.worldToScreen(c.worldX, c.worldY, p);
+      return { x: s.x + 10, y: s.y + 5, text: a.label, fontSize: 14, fill: 'white' };
+    });
+  });
+
+  lassoLineConfig = computed(() => {
+    const pts = this.lassoPoints();
+    if (pts.length < 2) return null;
+    const flat: number[] = [];
+    for (const pt of pts) {
+      flat.push(pt.x, pt.y);
+    }
+    return {
+      points: flat,
+      closed: true,
+      fill: 'rgba(0,255,255,0.15)',
+      stroke: 'rgba(0,255,255,0.6)',
+      strokeWidth: 2,
+      lineCap: 'round' as CanvasLineCap,
+      lineJoin: 'round' as CanvasLineJoin,
+    };
+  });
 
   ngAfterViewInit() {
     this.videoEl = this.videoPlayer.nativeElement;
-    this.canvasEl = this.annotationCanvas.nativeElement;
-    this.ctx = this.canvasEl.getContext('2d')!;
-
-    this.videoEl.addEventListener('loadedmetadata', () => {
-      this.onVideoReady()
-    });
+    this.videoEl.addEventListener('loadedmetadata', () => this.onVideoReady());
   }
 
   @HostListener('window:resize')
-  onResize(): void {
+  onResize() {
     this.onVideoReady();
   }
 
-  public onVideoReady() {
-    this.canvasEl.width = this.videoEl.videoWidth;
-    this.canvasEl.height = this.videoEl.videoHeight;
-    this.draw();
+  onVideoReady() {
+    requestAnimationFrame(() => {
+      this.videoDims.set({ w: this.videoEl.clientWidth, h: this.videoEl.clientHeight });
+    });
   }
 
   onTimeUpdate() {
-    this.draw();
+    this.carPose.set(this.getCarPositionAtTime(this.videoEl.currentTime));
   }
 
-  public toggleDrawingMode() {
-    this.isDrawingMode = !this.isDrawingMode;
-    console.log('Drawing mode:', this.isDrawingMode);
+  toggleDrawingMode() {
+    this.isDrawingMode.update(v => !v);
   }
 
-  public handleCanvasClick(event: MouseEvent) {
-    console.log('on handleCanvasClick')
-    if (!this.isDrawingMode) return;
-    const currentCarPose = this.getCarPositionAtTime(this.videoEl.currentTime);
-    const canvasMousePos = this.getMousePos(event);
-    const worldCoords = this.screenToWorld(canvasMousePos.x, canvasMousePos.y, currentCarPose);
-
-    this.annotations.push({
-      worldX: worldCoords.worldX,
-      worldY: worldCoords.worldY,
-      label: `Annotation #${this.annotations.length + 1}`
-    })
-    this.draw();
+  handleMouseDown(e: any) {
+    if (!this.isDrawingMode()) return;
+    const pos = e.event.currentTarget.getPointerPosition();
+    if (!pos) return;
+    e.event.evt?.preventDefault();
+    this.isLassoing.set(true);
+    this.lassoPoints.set([{ x: pos.x, y: pos.y }]);
   }
 
-  draw() {
-    console.log(`Drawing Annotations: ${this.annotations.length} items`);
-
-    const currentCarPose = this.getCarPositionAtTime(this.videoEl.currentTime);
-    const canvas = this.annotationCanvas.nativeElement;
-    this.ctx.clearRect(0, 0, canvas.width, canvas.height);
-    this.ctx.save();
-
-    this.ctx.translate(this.canvasEl.width / 2, this.canvasEl.height / 2);
-    this.ctx.rotate(-currentCarPose.yaw);
-    this.ctx.scale(this.pixelsPerMeter, this.pixelsPerMeter);
-    this.ctx.translate(-currentCarPose.worldX, -currentCarPose.worldY);
-
-    this.annotations.forEach(ann => this.drawAnnotation(ann))
-    this.ctx.restore();
+  @HostListener('window:mousemove', ['$event'])
+  onWindowMouseMove(e: MouseEvent) {
+    if (!this.isLassoing()) return;
+    e.preventDefault();
+    const rect = this.annotationStage.nativeElement.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    this.lassoPoints.update(pts => [...pts, { x, y }]);
   }
 
-  // TODO
+  @HostListener('window:mouseup')
+  onWindowMouseUp() {
+    if (!this.isLassoing()) return;
+    this.isLassoing.set(false);
+    const pts = this.lassoPoints();
+    if (pts.length < 3) {
+      this.lassoPoints.set([]);
+      return;
+    }
+    const hull = concaveman(pts.map(p => [p.x, p.y] as [number, number]));
+    const pose = this.carPose();
+    const worldVerts = hull.map(([x, y]) => this.screenToWorld(x, y, pose));
+    this.annotations.update(arr => [
+      ...arr,
+      { worldVertices: worldVerts, label: `#${arr.length + 1}` },
+    ]);
+    this.lassoPoints.set([]);
+  }
+
   private getCarPositionAtTime(time: number): CarPose {
-    // This is placeholder logic.
     return { timestamp: 0, worldX: 50 + time, worldY: 50, yaw: 0 };
   }
 
-  private drawAnnotation(annotation: PointAnnotation): void {
-    this.ctx.beginPath();
-    this.ctx.arc(annotation.worldX, annotation.worldY, 0.1, 0, 2 * Math.PI);
-    this.ctx.fillStyle = 'rgba(255, 0, 0, 0.7)';
-    this.ctx.fill();
-    this.ctx.closePath();
-
-    this.ctx.save();
-    this.ctx.setTransform(1, 0, 0, 1, 0, 0);
-    const screenPos = this.worldToScreen(annotation.worldX, annotation.worldY, this.getCarPositionAtTime(this.videoEl.currentTime)!);
-    this.ctx.fillStyle = 'white';
-    this.ctx.font = '14px Arial';
-    this.ctx.fillText(annotation.label, screenPos.x + 10, screenPos.y + 5);
-    this.ctx.restore();
-  }
-
-  // Converts mouse event coordinates to canvas-local coordinates.
-  // Accounts for CSS scaling of the canvas element.
-  private getMousePos(event: MouseEvent): { x: number, y: number } {
-    const rect = this.canvasEl.getBoundingClientRect();
-    const scaleX = this.canvasEl.width / rect.width;
-    const scaleY = this.canvasEl.height / rect.height;
-    return {
-      x: (event.clientX - rect.left) * scaleX,
-      y: (event.clientY - rect.top) * scaleY
-    };
-  }
-
-  // Converts a point from screen (canvas) space to world space.
-  // This is the inverse of the drawing transformation.
-  private screenToWorld(screenX: number, screenY: number, carPose: CarPose): { worldX: number, worldY: number } {
-    const canvasCenterX = this.canvasEl.width / 2;
-    const canvasCenterY = this.canvasEl.height / 2;
-
-    // Undo the canvas center translation
-    let x = screenX - canvasCenterX;
-    let y = screenY - canvasCenterY;
-
-    // Undo the scale
+  private screenToWorld(sx: number, sy: number, cp: CarPose) {
+    const vw = this.videoDims().w;
+    const vh = this.videoDims().h;
+    let x = sx - vw / 2;
+    let y = sy - vh / 2;
     x /= this.pixelsPerMeter;
     y /= this.pixelsPerMeter;
-
-    // Undo the rotation by rotating in the positive direction of the car's yaw
-    const cosYaw = Math.cos(carPose.yaw);
-    const sinYaw = Math.sin(carPose.yaw);
-    const rotatedX = x * cosYaw - y * sinYaw;
-    const rotatedY = x * sinYaw + y * cosYaw;
-
-    // Undo the car position translation
-    const worldX = rotatedX + carPose.worldX;
-    const worldY = rotatedY + carPose.worldY;
-
-    return { worldX, worldY };
-  }
-
-  // Converts a point from world space to screen (canvas) space.
-  // Useful for UI elements like labels that shouldn't be scaled/rotated.
-  private worldToScreen(worldX: number, worldY: number, carPose: CarPose): { x: number, y: number } {
-    const canvasCenterX = this.canvasEl.width / 2;
-    const canvasCenterY = this.canvasEl.height / 2;
-
-    // Translate relative to the car
-    let x = worldX - carPose.worldX;
-    let y = worldY - carPose.worldY;
-
-    // Scale up to pixels
-    x *= this.pixelsPerMeter;
-    y *= this.pixelsPerMeter;
-
-    // Rotate based on the car's yaw (negative)
-    const cosYaw = Math.cos(-carPose.yaw);
-    const sinYaw = Math.sin(-carPose.yaw);
-    const rotatedX = x * cosYaw - y * sinYaw;
-    const rotatedY = x * sinYaw + y * cosYaw;
-
-    // Translate to canvas center
+    const cos = Math.cos(cp.yaw);
+    const sin = Math.sin(cp.yaw);
     return {
-      x: rotatedX + canvasCenterX,
-      y: rotatedY + canvasCenterY
+      worldX: x * cos - y * sin + cp.worldX,
+      worldY: x * sin + y * cos + cp.worldY,
     };
   }
+
+  private worldToScreen(wx: number, wy: number, cp: CarPose) {
+    const vw = this.videoDims().w;
+    const vh = this.videoDims().h;
+    let x = (wx - cp.worldX) * this.pixelsPerMeter;
+    let y = (wy - cp.worldY) * this.pixelsPerMeter;
+    const cos = Math.cos(-cp.yaw);
+    const sin = Math.sin(-cp.yaw);
+    return {
+      x: x * cos - y * sin + vw / 2,
+      y: x * sin + y * cos + vh / 2,
+    };
+  }
+
+  private polygonCentroid(verts: { worldX: number; worldY: number }[]) {
+    let cx = 0;
+    let cy = 0;
+    for (const v of verts) {
+      cx += v.worldX;
+      cy += v.worldY;
+    }
+    return { worldX: cx / verts.length, worldY: cy / verts.length };
+  }
+
 }
