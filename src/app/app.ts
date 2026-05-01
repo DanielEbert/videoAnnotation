@@ -66,6 +66,14 @@ export class App {
   private _commentTimer: ReturnType<typeof setTimeout> | null = null;
   private _pendingComment: { id: number; comment: string } | null = null;
 
+  // undo / redo
+  private readonly MAX_HISTORY = 200;
+  private undoStack: { annotations: PolygonAnnotation[]; nextId: number }[] = [];
+  private redoStack: { annotations: PolygonAnnotation[]; nextId: number }[] = [];
+  private _historyVersion = signal(0);
+
+  bumpHistory() { this._historyVersion.update(v => v + 1); }
+
   // ── derivations ──
 
   layerConfig = computed(() => {
@@ -123,6 +131,9 @@ export class App {
   sortedAnnotations = computed(() =>
     [...this.annotations()].sort((a, b) => a.timestamp - b.timestamp || a.id - b.id)
   );
+
+  canUndo = computed(() => { this._historyVersion(); return this.undoStack.length > 0; });
+  canRedo = computed(() => { this._historyVersion(); return this.redoStack.length > 0; });
 
   // ── lifecycle ──
 
@@ -194,6 +205,7 @@ export class App {
     const worldVerts = hull.map(([x, y]) => this.screenToWorld(x, y, pose));
     const id = this._nextId++;
     const timestamp = this.videoEl.currentTime;
+    this.pushState();
     this.annotations.update(arr => [...arr, {
       id,
       worldVertices: worldVerts,
@@ -204,6 +216,19 @@ export class App {
     }]);
     this.lassoPoints.set([]);
     this.selectAnnotation(id);
+  }
+
+  @HostListener('window:keydown', ['$event'])
+  onKeyDown(e: KeyboardEvent) {
+    if (e.ctrlKey || e.metaKey) {
+      if (e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        this.undo();
+      } else if ((e.key === 'z' && e.shiftKey) || e.key === 'y') {
+        e.preventDefault();
+        this.redo();
+      }
+    }
   }
 
   // ── hover / click detection ──
@@ -250,6 +275,7 @@ export class App {
   // ── annotation field updates ──
 
   onTypeChange(id: number, type: string) {
+    this.pushState();
     this.editType.set(type);
     const label = type !== 'Unspecified' ? `${type} #${id}` : `#${id}`;
     this.annotations.update(arr => arr.map(a =>
@@ -268,6 +294,7 @@ export class App {
 
   deleteAnnotation(id: number) {
     this._flushCommentDebounce();
+    this.pushState();
     if (this.selectedAnnotationId() === id) {
       this.clearSelection();
     }
@@ -290,6 +317,7 @@ export class App {
   private _saveComment() {
     if (this._pendingComment) {
       const { id, comment } = this._pendingComment;
+      this.pushState();
       this.annotations.update(arr => arr.map(a =>
         a.id === id ? { ...a, comment } : a
       ));
@@ -305,6 +333,46 @@ export class App {
     }
   }
 
+  private pushState() {
+    this.undoStack.push({
+      annotations: JSON.parse(JSON.stringify(this.annotations())),
+      nextId: this._nextId,
+    });
+    if (this.undoStack.length > this.MAX_HISTORY) {
+      this.undoStack.shift();
+    }
+    this.redoStack = [];
+    this.bumpHistory();
+  }
+
+  undo() {
+    this._flushCommentDebounce();
+    if (!this.canUndo()) return;
+    this.redoStack.push({
+      annotations: JSON.parse(JSON.stringify(this.annotations())),
+      nextId: this._nextId,
+    });
+    const state = this.undoStack.pop()!;
+    this.annotations.set(state.annotations);
+    this._nextId = state.nextId;
+    this.clearSelection();
+    this.bumpHistory();
+  }
+
+  redo() {
+    this._flushCommentDebounce();
+    if (!this.canRedo()) return;
+    this.undoStack.push({
+      annotations: JSON.parse(JSON.stringify(this.annotations())),
+      nextId: this._nextId,
+    });
+    const state = this.redoStack.pop()!;
+    this.annotations.set(state.annotations);
+    this._nextId = state.nextId;
+    this.clearSelection();
+    this.bumpHistory();
+  }
+
   // ── export / import ──
 
   exportAnnotations() {
@@ -317,6 +385,7 @@ export class App {
       const text = await navigator.clipboard.readText();
       const data = JSON.parse(text) as PolygonAnnotation[];
       if (!Array.isArray(data)) return;
+      this.pushState();
       this._nextId = Math.max(0, ...data.map(a => a.id)) + 1;
       this.annotations.set(data);
       this.clearSelection();
