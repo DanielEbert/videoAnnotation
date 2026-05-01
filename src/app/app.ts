@@ -58,13 +58,15 @@ export class App {
   carPose = signal<CarPose>({ timestamp: 0, worldX: 50, worldY: 50, yaw: 0 });
   videoDims = signal({ width: 640, height: 360 });
 
-  lassoPoints = signal<{ x: number; y: number }[]>([]);
-
   private _nextId = 1;
   hoveredAnnotationId = signal<number | null>(null);
   selectedAnnotationId = signal<number | null>(null);
+  // used to set hover text position
   mousePos = signal({ x: 0, y: 0 });
+
   private _lassoStart: { x: number; y: number } | null = null;
+  lassoPoints = signal<{ x: number; y: number }[]>([]);
+
   private _draggingAnnotationId: number | null = null;
   dragStartScreen = signal<{ x: number; y: number } | null>(null);
   private _dragStartWorldVertices: { worldX: number; worldY: number }[] = [];
@@ -440,6 +442,23 @@ export class App {
     }, 300);
   }
 
+  private _saveComment() {
+    if (this._pendingComment) {
+      const { id, comment } = this._pendingComment;
+      this.pushState();
+      this.annotations.update((arr) => arr.map((a) => (a.id === id ? { ...a, comment } : a)));
+      this._pendingComment = null;
+    }
+    this._commentTimer = null;
+  }
+
+  private _flushCommentDebounce() {
+    if (this._commentTimer) {
+      clearTimeout(this._commentTimer);
+      this._saveComment();
+    }
+  }
+
   nudgeAnnotation(id: number, key: string, shiftKey: boolean) {
     const pixelStep = shiftKey ? 1 : 5;
     let screenDx = 0,
@@ -503,22 +522,7 @@ export class App {
     return `${m}:${s.toString().padStart(2, '0')}`;
   }
 
-  private _saveComment() {
-    if (this._pendingComment) {
-      const { id, comment } = this._pendingComment;
-      this.pushState();
-      this.annotations.update((arr) => arr.map((a) => (a.id === id ? { ...a, comment } : a)));
-      this._pendingComment = null;
-    }
-    this._commentTimer = null;
-  }
-
-  private _flushCommentDebounce() {
-    if (this._commentTimer) {
-      clearTimeout(this._commentTimer);
-      this._saveComment();
-    }
-  }
+  // undo / redo
 
   private _snapshot() {
     return { annotations: JSON.parse(JSON.stringify(this.annotations())), nextId: this._nextId };
