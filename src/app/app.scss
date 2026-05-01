@@ -1,0 +1,26 @@
+.video-container {
+  position: relative;
+}
+
+video, canvas {
+  width: 100%;
+  height: 100%;
+}
+
+video {
+	position: relative;
+	z-index: 1;
+}
+
+canvas {
+  position: absolute; /* Position the canvas relative to the container */
+  top: 0;
+  left: 0;
+  pointer-events: none; /* Allows clicks to go "through" the canvas to the video controls, toggle this when in drawing mode */
+  z-index: 2;
+}
+
+canvas.drawing-active {
+	pointer-events: auto; /* Allows clicks to go through to the canvas when drawing mode is active */
+    cursor: crosshair; /* Optional: change cursor to indicate drawing mode */
+}
