@@ -52,6 +52,7 @@ export class App {
 
   isLassoing = signal(false);
   lassoPoints = signal<{ x: number; y: number }[]>([]);
+  isDraggingAnnotation = signal(false);
 
   private _nextId = 1;
   hoveredAnnotationId = signal<number | null>(null);
@@ -59,9 +60,11 @@ export class App {
   mousePos = signal({ x: 0, y: 0 });
   private _mouseMoved = false;
   private _lassoStart = { x: 0, y: 0 };
+  private _draggingAnnotationId: number | null = null;
+  private _dragStartScreen = { x: 0, y: 0 };
+  private _dragStartWorldVertices: { worldX: number; worldY: number }[] = [];
+  private _dragMoved = false;
 
-  // edit form buffer signals (updated immediately for responsiveness)
-  editType = signal('');
   editComment = signal('');
   private _commentTimer: ReturnType<typeof setTimeout> | null = null;
   private _pendingComment: { id: number; comment: string } | null = null;
@@ -120,15 +123,7 @@ export class App {
     };
   });
 
-  hoveredAnnotation = computed(() => {
-    const id = this.hoveredAnnotationId();
-    return id !== null ? this.annotations().find(a => a.id === id) ?? null : null;
-  });
-
-  selectedAnnotation = computed(() => {
-    const id = this.selectedAnnotationId();
-    return id !== null ? this.annotations().find(a => a.id === id) ?? null : null;
-  });
+  hoveredAnnotation = computed(() => this.annotations().find(a => a.id === this.hoveredAnnotationId()) ?? null);
 
   sortedAnnotations = computed(() =>
     [...this.annotations()].sort((a, b) => a.timestamp - b.timestamp || a.id - b.id)
@@ -138,10 +133,8 @@ export class App {
   canRedo = computed(() => { this._historyVersion(); return this.redoStack.length > 0; });
 
   editPanelAnnotation = computed(() => {
-    const hovered = this.hoveredAnnotationId();
-    const selected = this.selectedAnnotationId();
-    const id = hovered ?? selected;
-    return id !== null ? this.annotations().find(a => a.id === id) ?? null : null;
+    const id = this.hoveredAnnotationId() ?? this.selectedAnnotationId();
+    return this.annotations().find(a => a.id === id) ?? null;
   });
 
   // ── lifecycle ──
@@ -149,13 +142,7 @@ export class App {
   constructor() {
     effect(() => {
       const a = this.editPanelAnnotation();
-      if (a) {
-        this.editType.set(a.mistakeType);
-        this.editComment.set(a.comment);
-      } else {
-        this.editType.set('');
-        this.editComment.set('');
-      }
+      this.editComment.set(a?.comment ?? '');
     });
   }
 
@@ -180,6 +167,7 @@ export class App {
 
   handleMouseDown(e: any) {
     if (!this.isDrawingMode()) return;
+    if (e.event.evt?.button === 2) return;
     const pos = e.event.currentTarget.getPointerPosition();
     if (!pos) return;
     e.event.evt?.preventDefault();
@@ -187,6 +175,37 @@ export class App {
     this._lassoStart = { x: pos.x, y: pos.y };
     this.isLassoing.set(true);
     this.lassoPoints.set([{ x: pos.x, y: pos.y }]);
+  }
+
+  @HostListener('window:mousedown', ['$event'])
+  onWindowMouseDown(e: MouseEvent) {
+    if (e.button !== 2) return;
+    const rect = this.annotationStage?.nativeElement?.getBoundingClientRect();
+    if (!rect) return;
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    const vd = this.videoDims();
+    if (sx < 0 || sy < 0 || sx > vd.width || sy > vd.height) return;
+    const found = this.findAnnotationAtScreen(sx, sy);
+    if (!found) return;
+    e.preventDefault();
+    this._flushCommentDebounce();
+    this.pushState();
+    this.selectAnnotation(found.id);
+    this.isDraggingAnnotation.set(true);
+    this._draggingAnnotationId = found.id;
+    this._dragStartScreen = { x: sx, y: sy };
+    this._dragStartWorldVertices = JSON.parse(JSON.stringify(found.worldVertices));
+    this._dragMoved = false;
+  }
+
+  @HostListener('window:contextmenu', ['$event'])
+  onContextMenu(e: MouseEvent) {
+    const rect = this.annotationStage?.nativeElement?.getBoundingClientRect();
+    if (rect && e.clientX >= rect.left && e.clientX <= rect.right &&
+        e.clientY >= rect.top && e.clientY <= rect.bottom) {
+      e.preventDefault();
+    }
   }
 
   @HostListener('window:mousemove', ['$event'])
@@ -197,6 +216,24 @@ export class App {
     this.mousePos.set({ x: e.clientX, y: e.clientY });
 
     this.checkAnnotationHover(stageX, stageY);
+
+    if (this.isDraggingAnnotation()) {
+      this._dragMoved = true;
+      const pose = this.carPose();
+      const startWorld = this.screenToWorld(this._dragStartScreen.x, this._dragStartScreen.y, pose);
+      const curWorld = this.screenToWorld(stageX, stageY, pose);
+      const worldDx = curWorld.worldX - startWorld.worldX;
+      const worldDy = curWorld.worldY - startWorld.worldY;
+      const orig = this._dragStartWorldVertices;
+      this.annotations.update(arr => arr.map(a => {
+        if (a.id !== this._draggingAnnotationId) return a;
+        return {
+          ...a,
+          worldVertices: orig.map(v => ({ worldX: v.worldX + worldDx, worldY: v.worldY + worldDy })),
+        };
+      }));
+      return;
+    }
 
     if (!this.isLassoing()) return;
 
@@ -211,6 +248,16 @@ export class App {
 
   @HostListener('window:mouseup')
   onWindowMouseUp() {
+    if (this.isDraggingAnnotation()) {
+      if (!this._dragMoved) {
+        this.undoStack.pop();
+        this.bumpHistory();
+      }
+      this.isDraggingAnnotation.set(false);
+      this._draggingAnnotationId = null;
+      return;
+    }
+
     if (!this.isLassoing()) return;
     this.isLassoing.set(false);
 
@@ -304,14 +351,12 @@ export class App {
     const a = this.annotations().find(x => x.id === id);
     if (!a) return;
     this.selectedAnnotationId.set(id);
-    this.editType.set(a.mistakeType);
     this.editComment.set(a.comment);
   }
 
   clearSelection() {
     this._flushCommentDebounce();
     this.selectedAnnotationId.set(null);
-    this.editType.set('');
     this.editComment.set('');
   }
 
@@ -321,7 +366,6 @@ export class App {
     const existing = this.annotations().find(x => x.id === id);
     if (!existing || existing.mistakeType === type) return;
     this.pushState();
-    this.editType.set(type);
     const label = type !== 'Unspecified' ? `${type} #${id}` : `#${id}`;
     this.annotations.update(arr => arr.map(a =>
       a.id === id ? { ...a, mistakeType: type, label } : a
@@ -340,17 +384,13 @@ export class App {
   deleteAnnotation(id: number) {
     this._flushCommentDebounce();
     this.pushState();
-    if (this.selectedAnnotationId() === id) {
-      this.clearSelection();
-    }
+    if (this.selectedAnnotationId() === id) this.clearSelection();
     this.annotations.update(arr => arr.filter(a => a.id !== id));
   }
 
   jumpToAnnotation(id: number) {
     const a = this.annotations().find(x => x.id === id);
-    if (a && this.videoEl) {
-      this.videoEl.currentTime = a.timestamp;
-    }
+    if (a && this.videoEl) this.videoEl.currentTime = a.timestamp;
   }
 
   formatTime(seconds: number): string {
@@ -378,14 +418,13 @@ export class App {
     }
   }
 
+  private _snapshot() {
+    return { annotations: JSON.parse(JSON.stringify(this.annotations())), nextId: this._nextId };
+  }
+
   private pushState() {
-    this.undoStack.push({
-      annotations: JSON.parse(JSON.stringify(this.annotations())),
-      nextId: this._nextId,
-    });
-    if (this.undoStack.length > this.MAX_HISTORY) {
-      this.undoStack.shift();
-    }
+    this.undoStack.push(this._snapshot());
+    if (this.undoStack.length > this.MAX_HISTORY) this.undoStack.shift();
     this.redoStack = [];
     this.bumpHistory();
   }
@@ -393,10 +432,7 @@ export class App {
   undo() {
     this._flushCommentDebounce();
     if (!this.canUndo()) return;
-    this.redoStack.push({
-      annotations: JSON.parse(JSON.stringify(this.annotations())),
-      nextId: this._nextId,
-    });
+    this.redoStack.push(this._snapshot());
     const state = this.undoStack.pop()!;
     this.annotations.set(state.annotations);
     this._nextId = state.nextId;
@@ -407,10 +443,7 @@ export class App {
   redo() {
     this._flushCommentDebounce();
     if (!this.canRedo()) return;
-    this.undoStack.push({
-      annotations: JSON.parse(JSON.stringify(this.annotations())),
-      nextId: this._nextId,
-    });
+    this.undoStack.push(this._snapshot());
     const state = this.redoStack.pop()!;
     this.annotations.set(state.annotations);
     this._nextId = state.nextId;

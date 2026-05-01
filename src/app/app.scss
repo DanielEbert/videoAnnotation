@@ -313,6 +313,12 @@ ko-stage.drawing-active {
   user-select: none;
 }
 
+ko-stage.dragging {
+  pointer-events: auto;
+  cursor: grabbing;
+  user-select: none;
+}
+
 .toggle-btn {
   display: block;
   margin: 8px 10px;
