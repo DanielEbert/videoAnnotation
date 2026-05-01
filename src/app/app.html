@@ -33,6 +33,7 @@
     @if (hoveredAnnotation(); as a) {
       <div class="hover-tooltip" [style.left.px]="mousePos().x + 12" [style.top.px]="mousePos().y + 12">
         <strong>{{ a.mistakeType === 'Unspecified' ? '' : a.mistakeType }}</strong>
+        <div class="tooltip-time">{{ formatTime(a.timestamp) }}</div>
         @if (a.comment) { <div class="tooltip-comment">{{ a.comment }}</div> }
       </div>
     }
@@ -71,7 +72,7 @@
 
         <div class="edit-panel-actions">
           <button class="btn-jump" (click)="jumpToAnnotation(a.id)">Jump to timestamp</button>
-          <button class="btn-delete" (click)="deleteAnnotation(a.id)">Delete</button>
+          <button class="btn-delete" (click)="deleteAnnotation(a.id)">Delete <span class="shortcut">Del</span></button>
         </div>
       </div>
     }
@@ -80,9 +81,11 @@
       <h3 class="sidebar-title">All Annotations</h3>
       <div class="toolbar-row">
         <button class="btn-undo" [disabled]="!canUndo()" (click)="undo()">↩ Undo <span class="shortcut">Ctrl+Z</span></button>
-        <button class="btn-redo" [disabled]="!canRedo()" (click)="redo()">↪ Redo <span class="shortcut">Ctrl+⇧Z</span></button>
-        <button class="btn-export" (click)="exportAnnotations()">Export</button>
-        <button class="btn-import" (click)="importAnnotations()">Import</button>
+        <button class="btn-redo" [disabled]="!canRedo()" (click)="redo()">↪ Redo <span class="shortcut">Ctrl+Y</span></button>
+      </div>
+      <div class="toolbar-row">
+        <button class="btn-export" (click)="exportAnnotations()">↥ Export</button>
+        <button class="btn-import" (click)="importAnnotations()">↧ Import</button>
       </div>
       @if (sortedAnnotations().length === 0) {
         <p class="empty-hint">No annotations yet. Draw a lasso to create one.</p>

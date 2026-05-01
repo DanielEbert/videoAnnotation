@@ -253,6 +253,16 @@ export class App {
       return;
     }
 
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      const a = this.editPanelAnnotation();
+      if (!a) return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      e.preventDefault();
+      this.deleteAnnotation(a.id);
+      return;
+    }
+
     if (/^[0-9]$/.test(e.key)) {
       const a = this.editPanelAnnotation();
       if (!a) return;
