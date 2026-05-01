@@ -7,7 +7,7 @@
         src="https://test-videos.co.uk/vids/bigbuckbunny/mp4/av1/360/Big_Buck_Bunny_360_10s_1MB.mp4"
         controls
       ></video>
-      <ko-stage #annotationStage [config]="videoDims()" [class.drawing-active]="isDrawingMode()" [class.dragging]="isDraggingAnnotation()" (mousedown)="handleMouseDown($event)">
+      <ko-stage #annotationStage [config]="videoDims()" [class.drawing-active]="isDrawingMode()" [class.dragging]="dragStartScreen() !== null" (mousedown)="handleMouseDown($event)">
         <ko-layer [config]="layerConfig()">
           @for (p of polygonConfigs(); track $index) {
             <ko-line [config]="p"></ko-line>

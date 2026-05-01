@@ -1,4 +1,12 @@
-import { Component, computed, effect, ElementRef, HostListener, signal, ViewChild } from '@angular/core';
+import {
+  Component,
+  computed,
+  effect,
+  ElementRef,
+  HostListener,
+  signal,
+  ViewChild,
+} from '@angular/core';
 import concaveman from 'concaveman';
 import { CoreShapeComponent, StageComponent } from 'ng2-konva';
 
@@ -44,26 +52,22 @@ export class App {
   private videoEl!: HTMLVideoElement;
   private pixelsPerMeter = 100;
 
-  // ── state ──
+  // state
   isDrawingMode = signal(true);
   annotations = signal<PolygonAnnotation[]>([]);
   carPose = signal<CarPose>({ timestamp: 0, worldX: 50, worldY: 50, yaw: 0 });
   videoDims = signal({ width: 640, height: 360 });
 
-  isLassoing = signal(false);
   lassoPoints = signal<{ x: number; y: number }[]>([]);
-  isDraggingAnnotation = signal(false);
 
   private _nextId = 1;
   hoveredAnnotationId = signal<number | null>(null);
   selectedAnnotationId = signal<number | null>(null);
   mousePos = signal({ x: 0, y: 0 });
-  private _mouseMoved = false;
-  private _lassoStart = { x: 0, y: 0 };
+  private _lassoStart: { x: number; y: number } | null = null;
   private _draggingAnnotationId: number | null = null;
-  private _dragStartScreen = { x: 0, y: 0 };
+  dragStartScreen = signal<{ x: number; y: number } | null>(null);
   private _dragStartWorldVertices: { worldX: number; worldY: number }[] = [];
-  private _dragMoved = false;
 
   editComment = signal('');
   private _commentTimer: ReturnType<typeof setTimeout> | null = null;
@@ -71,34 +75,44 @@ export class App {
 
   // undo / redo
   private readonly MAX_HISTORY = 200;
-  private undoStack: { annotations: PolygonAnnotation[]; nextId: number }[] = [];
-  private redoStack: { annotations: PolygonAnnotation[]; nextId: number }[] = [];
-  private _historyVersion = signal(0);
+  private undoStack = signal<{ annotations: PolygonAnnotation[]; nextId: number }[]>([]);
+  private redoStack = signal<{ annotations: PolygonAnnotation[]; nextId: number }[]>([]);
 
-  bumpHistory() { this._historyVersion.update(v => v + 1); }
-
-  // ── derivations ──
+  // derivations
 
   layerConfig = computed(() => {
     const { width, height } = this.videoDims();
     const { worldX, worldY, yaw } = this.carPose();
     return {
-      x: width / 2, y: height / 2, offsetX: worldX, offsetY: worldY,
-      scaleX: this.pixelsPerMeter, scaleY: this.pixelsPerMeter, rotation: -yaw * 180 / Math.PI
+      x: width / 2,
+      y: height / 2,
+      offsetX: worldX,
+      offsetY: worldY,
+      scaleX: this.pixelsPerMeter,
+      scaleY: this.pixelsPerMeter,
+      rotation: (-yaw * 180) / Math.PI,
     };
   });
 
   polygonConfigs = computed(() => {
     const selId = this.selectedAnnotationId();
     const hoverId = this.hoveredAnnotationId();
-    return this.annotations().map(a => {
+    return this.annotations().map((a) => {
       const isSel = a.id === selId;
       const isHover = a.id === hoverId;
       return {
-        points: a.worldVertices.flatMap(v => [v.worldX, v.worldY]),
+        points: a.worldVertices.flatMap((v) => [v.worldX, v.worldY]),
         closed: true,
-        fill: isSel ? 'rgba(255,255,0,0.25)' : isHover ? 'rgba(255,255,255,0.10)' : 'rgba(255,0,0,0.15)',
-        stroke: isSel ? 'rgba(255,255,0,0.9)' : isHover ? 'rgba(200,200,255,0.5)' : 'rgba(255,0,0,0.7)',
+        fill: isSel
+          ? 'rgba(255,255,0,0.25)'
+          : isHover
+            ? 'rgba(255,255,255,0.10)'
+            : 'rgba(255,0,0,0.15)',
+        stroke: isSel
+          ? 'rgba(255,255,0,0.9)'
+          : isHover
+            ? 'rgba(200,200,255,0.5)'
+            : 'rgba(255,0,0,0.7)',
         strokeWidth: isSel ? 3 / this.pixelsPerMeter : 2 / this.pixelsPerMeter,
       };
     });
@@ -106,7 +120,7 @@ export class App {
 
   labelConfigs = computed(() => {
     const p = this.carPose();
-    return this.annotations().map(a => {
+    return this.annotations().map((a) => {
       const { worldX, worldY } = this.polygonCentroid(a.worldVertices);
       const s = this.worldToScreen(worldX, worldY, p);
       return { x: s.x + 10, y: s.y + 5, text: a.label, fontSize: 14, fill: 'white' };
@@ -117,24 +131,30 @@ export class App {
     const pts = this.lassoPoints();
     if (pts.length < 2) return null;
     return {
-      points: pts.flatMap(p => [p.x, p.y]),
-      closed: true, fill: 'rgba(0,255,255,0.15)', stroke: 'rgba(0,255,255,0.6)',
-      strokeWidth: 2, lineCap: 'round', lineJoin: 'round',
+      points: pts.flatMap((p) => [p.x, p.y]),
+      closed: true,
+      fill: 'rgba(0,255,255,0.15)',
+      stroke: 'rgba(0,255,255,0.6)',
+      strokeWidth: 2,
+      lineCap: 'round',
+      lineJoin: 'round',
     };
   });
 
-  hoveredAnnotation = computed(() => this.annotations().find(a => a.id === this.hoveredAnnotationId()) ?? null);
-
-  sortedAnnotations = computed(() =>
-    [...this.annotations()].sort((a, b) => a.timestamp - b.timestamp || a.id - b.id)
+  hoveredAnnotation = computed(
+    () => this.annotations().find((a) => a.id === this.hoveredAnnotationId()) ?? null,
   );
 
-  canUndo = computed(() => { this._historyVersion(); return this.undoStack.length > 0; });
-  canRedo = computed(() => { this._historyVersion(); return this.redoStack.length > 0; });
+  sortedAnnotations = computed(() =>
+    [...this.annotations()].sort((a, b) => a.timestamp - b.timestamp || a.id - b.id),
+  );
+
+  canUndo = computed(() => this.undoStack().length > 0);
+  canRedo = computed(() => this.redoStack().length > 0);
 
   editPanelAnnotation = computed(() => {
     const id = this.hoveredAnnotationId() ?? this.selectedAnnotationId();
-    return this.annotations().find(a => a.id === id) ?? null;
+    return this.annotations().find((a) => a.id === id) ?? null;
   });
 
   // ── lifecycle ──
@@ -152,18 +172,22 @@ export class App {
   }
 
   @HostListener('window:resize')
-  onResize() { this.onVideoReady(); }
+  onResize() {
+    this.onVideoReady();
+  }
 
   onVideoReady() {
     const { clientWidth: width, clientHeight: height } = this.videoEl;
     requestAnimationFrame(() => this.videoDims.set({ width, height }));
   }
 
-  onTimeUpdate() { this.carPose.set(this.getCarPositionAtTime(this.videoEl.currentTime)); }
+  onTimeUpdate() {
+    this.carPose.set(this.getCarPositionAtTime(this.videoEl.currentTime));
+  }
 
-  toggleDrawingMode() { this.isDrawingMode.update(v => !v); }
-
-  // ── mouse handlers ──
+  toggleDrawingMode() {
+    this.isDrawingMode.update((v) => !v);
+  }
 
   handleMouseDown(e: any) {
     if (!this.isDrawingMode()) return;
@@ -171,9 +195,7 @@ export class App {
     const pos = e.event.currentTarget.getPointerPosition();
     if (!pos) return;
     e.event.evt?.preventDefault();
-    this._mouseMoved = false;
     this._lassoStart = { x: pos.x, y: pos.y };
-    this.isLassoing.set(true);
     this.lassoPoints.set([{ x: pos.x, y: pos.y }]);
   }
 
@@ -192,18 +214,21 @@ export class App {
     this._flushCommentDebounce();
     this.pushState();
     this.selectAnnotation(found.id);
-    this.isDraggingAnnotation.set(true);
     this._draggingAnnotationId = found.id;
-    this._dragStartScreen = { x: sx, y: sy };
+    this.dragStartScreen.set({ x: sx, y: sy });
     this._dragStartWorldVertices = JSON.parse(JSON.stringify(found.worldVertices));
-    this._dragMoved = false;
   }
 
   @HostListener('window:contextmenu', ['$event'])
   onContextMenu(e: MouseEvent) {
     const rect = this.annotationStage?.nativeElement?.getBoundingClientRect();
-    if (rect && e.clientX >= rect.left && e.clientX <= rect.right &&
-        e.clientY >= rect.top && e.clientY <= rect.bottom) {
+    if (
+      rect &&
+      e.clientX >= rect.left &&
+      e.clientX <= rect.right &&
+      e.clientY >= rect.top &&
+      e.clientY <= rect.bottom
+    ) {
       e.preventDefault();
     }
   }
@@ -217,73 +242,95 @@ export class App {
 
     this.checkAnnotationHover(stageX, stageY);
 
-    if (this.isDraggingAnnotation()) {
-      this._dragMoved = true;
+    const dragStart = this.dragStartScreen();
+    if (dragStart !== null) {
       const pose = this.carPose();
-      const startWorld = this.screenToWorld(this._dragStartScreen.x, this._dragStartScreen.y, pose);
+      const startWorld = this.screenToWorld(dragStart.x, dragStart.y, pose);
       const curWorld = this.screenToWorld(stageX, stageY, pose);
       const worldDx = curWorld.worldX - startWorld.worldX;
       const worldDy = curWorld.worldY - startWorld.worldY;
       const orig = this._dragStartWorldVertices;
-      this.annotations.update(arr => arr.map(a => {
-        if (a.id !== this._draggingAnnotationId) return a;
-        return {
-          ...a,
-          worldVertices: orig.map(v => ({ worldX: v.worldX + worldDx, worldY: v.worldY + worldDy })),
-        };
-      }));
+      this.annotations.update((arr) =>
+        arr.map((a) => {
+          if (a.id !== this._draggingAnnotationId) return a;
+          return {
+            ...a,
+            worldVertices: orig.map((v) => ({
+              worldX: v.worldX + worldDx,
+              worldY: v.worldY + worldDy,
+            })),
+          };
+        }),
+      );
       return;
     }
 
-    if (!this.isLassoing()) return;
+    const lassoStart = this._lassoStart;
+    if (lassoStart === null) return;
 
-    const dx = stageX - this._lassoStart.x;
-    const dy = stageY - this._lassoStart.y;
-    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
-      this._mouseMoved = true;
-    }
-
-    this.lassoPoints.update(pts => [...pts, { x: stageX, y: stageY }]);
+    this.lassoPoints.update((pts) => [...pts, { x: stageX, y: stageY }]);
   }
 
   @HostListener('window:mouseup')
   onWindowMouseUp() {
-    if (this.isDraggingAnnotation()) {
-      if (!this._dragMoved) {
-        this.undoStack.pop();
-        this.bumpHistory();
+    if (this.dragStartScreen() !== null) {
+      const dragged = this.annotations().find((a) => a.id === this._draggingAnnotationId);
+      if (
+        dragged &&
+        this._dragStartWorldVertices.every(
+          (v, i) =>
+            Math.abs(v.worldX - dragged.worldVertices[i].worldX) < 0.01 &&
+            Math.abs(v.worldY - dragged.worldVertices[i].worldY) < 0.01,
+        )
+      ) {
+        this.undoStack.update((s) => {
+          s.pop();
+          return [...s];
+        });
       }
-      this.isDraggingAnnotation.set(false);
+      this.dragStartScreen.set(null);
       this._draggingAnnotationId = null;
       return;
     }
 
-    if (!this.isLassoing()) return;
-    this.isLassoing.set(false);
+    const lassoStart = this._lassoStart;
+    if (lassoStart === null) return;
 
-    if (!this._mouseMoved) {
+    const anyMoved = this.lassoPoints().some(
+      (p) => Math.abs(p.x - lassoStart.x) > 3 || Math.abs(p.y - lassoStart.y) > 3,
+    );
+    if (!anyMoved) {
       this.lassoPoints.set([]);
-      this.handleAnnotationClick(this._lassoStart.x, this._lassoStart.y);
+      this.handleAnnotationClick(lassoStart.x, lassoStart.y);
+      this._lassoStart = null;
       return;
     }
 
     const pts = this.lassoPoints();
-    if (pts.length < 3) { this.lassoPoints.set([]); return; }
-    const hull = concaveman(pts.map(p => [p.x, p.y]));
+    if (pts.length < 3) {
+      this.lassoPoints.set([]);
+      this._lassoStart = null;
+      return;
+    }
+    const hull = concaveman(pts.map((p) => [p.x, p.y]));
     const pose = this.carPose();
     const worldVerts = hull.map(([x, y]) => this.screenToWorld(x, y, pose));
     const id = this._nextId++;
     const timestamp = this.videoEl.currentTime;
     this.pushState();
-    this.annotations.update(arr => [...arr, {
-      id,
-      worldVertices: worldVerts,
-      label: `#${id}`,
-      mistakeType: 'Unspecified',
-      comment: '',
-      timestamp,
-    }]);
+    this.annotations.update((arr) => [
+      ...arr,
+      {
+        id,
+        worldVertices: worldVerts,
+        label: `#${id}`,
+        mistakeType: 'Unspecified',
+        comment: '',
+        timestamp,
+      },
+    ]);
     this.lassoPoints.set([]);
+    this._lassoStart = null;
     this.selectAnnotation(id);
   }
 
@@ -337,8 +384,8 @@ export class App {
 
   private findAnnotationAtScreen(sx: number, sy: number): PolygonAnnotation | undefined {
     const pose = this.carPose();
-    return this.annotations().find(a => {
-      const screenVerts = a.worldVertices.map(v => {
+    return this.annotations().find((a) => {
+      const screenVerts = a.worldVertices.map((v) => {
         const s = this.worldToScreen(v.worldX, v.worldY, pose);
         return { x: s.x, y: s.y };
       });
@@ -356,11 +403,11 @@ export class App {
     matched ? this.selectAnnotation(matched.id) : this.clearSelection();
   }
 
-  // ── annotation selection ──
+  // annotation selection
 
   selectAnnotation(id: number) {
     this._flushCommentDebounce();
-    const a = this.annotations().find(x => x.id === id);
+    const a = this.annotations().find((x) => x.id === id);
     if (!a) return;
     this.selectedAnnotationId.set(id);
     this.editComment.set(a.comment);
@@ -372,16 +419,16 @@ export class App {
     this.editComment.set('');
   }
 
-  // ── annotation field updates ──
+  // annotation field updates
 
   onTypeChange(id: number, type: string) {
-    const existing = this.annotations().find(x => x.id === id);
+    const existing = this.annotations().find((x) => x.id === id);
     if (!existing || existing.mistakeType === type) return;
     this.pushState();
     const label = type !== 'Unspecified' ? `${type} #${id}` : `#${id}`;
-    this.annotations.update(arr => arr.map(a =>
-      a.id === id ? { ...a, mistakeType: type, label } : a
-    ));
+    this.annotations.update((arr) =>
+      arr.map((a) => (a.id === id ? { ...a, mistakeType: type, label } : a)),
+    );
   }
 
   onCommentInput(id: number, comment: string) {
@@ -395,7 +442,8 @@ export class App {
 
   nudgeAnnotation(id: number, key: string, shiftKey: boolean) {
     const pixelStep = shiftKey ? 1 : 5;
-    let screenDx = 0, screenDy = 0;
+    let screenDx = 0,
+      screenDy = 0;
     if (key === 'ArrowUp') screenDy = -pixelStep;
     else if (key === 'ArrowDown') screenDy = pixelStep;
     else if (key === 'ArrowLeft') screenDx = -pixelStep;
@@ -411,39 +459,41 @@ export class App {
     const worldDy = (screenDx * sin + screenDy * cos) / ppm;
 
     this.pushState();
-    this.annotations.update(arr => arr.map(a => {
-      if (a.id !== id) return a;
-      return {
-        ...a,
-        worldVertices: a.worldVertices.map(v => ({
-          worldX: v.worldX + worldDx,
-          worldY: v.worldY + worldDy,
-        })),
-      };
-    }));
+    this.annotations.update((arr) =>
+      arr.map((a) => {
+        if (a.id !== id) return a;
+        return {
+          ...a,
+          worldVertices: a.worldVertices.map((v) => ({
+            worldX: v.worldX + worldDx,
+            worldY: v.worldY + worldDy,
+          })),
+        };
+      }),
+    );
   }
 
   deleteAnnotation(id: number) {
     this._flushCommentDebounce();
     this.pushState();
     if (this.selectedAnnotationId() === id) this.clearSelection();
-    this.annotations.update(arr => arr.filter(a => a.id !== id));
+    this.annotations.update((arr) => arr.filter((a) => a.id !== id));
   }
 
   onTimestampChange(id: number, value: string) {
     const seconds = this.parseTimestamp(value);
     if (isNaN(seconds)) return;
-    const existing = this.annotations().find(x => x.id === id);
+    const existing = this.annotations().find((x) => x.id === id);
     if (!existing || existing.timestamp === seconds) return;
     this._flushCommentDebounce();
     this.pushState();
-    this.annotations.update(arr => arr.map(a =>
-      a.id === id ? { ...a, timestamp: seconds } : a
-    ));
+    this.annotations.update((arr) =>
+      arr.map((a) => (a.id === id ? { ...a, timestamp: seconds } : a)),
+    );
   }
 
   jumpToAnnotation(id: number) {
-    const a = this.annotations().find(x => x.id === id);
+    const a = this.annotations().find((x) => x.id === id);
     if (a && this.videoEl) this.videoEl.currentTime = a.timestamp;
   }
 
@@ -457,9 +507,7 @@ export class App {
     if (this._pendingComment) {
       const { id, comment } = this._pendingComment;
       this.pushState();
-      this.annotations.update(arr => arr.map(a =>
-        a.id === id ? { ...a, comment } : a
-      ));
+      this.annotations.update((arr) => arr.map((a) => (a.id === id ? { ...a, comment } : a)));
       this._pendingComment = null;
     }
     this._commentTimer = null;
@@ -477,39 +525,53 @@ export class App {
   }
 
   private pushState() {
-    this.undoStack.push(this._snapshot());
-    if (this.undoStack.length > this.MAX_HISTORY) this.undoStack.shift();
-    this.redoStack = [];
-    this.bumpHistory();
+    this.undoStack.update((s) => {
+      s.push(this._snapshot());
+      if (s.length > this.MAX_HISTORY) s.shift();
+      return [...s];
+    });
+    this.redoStack.set([]);
   }
 
   undo() {
     this._flushCommentDebounce();
     if (!this.canUndo()) return;
-    this.redoStack.push(this._snapshot());
-    const state = this.undoStack.pop()!;
-    this.annotations.set(state.annotations);
-    this._nextId = state.nextId;
+    let state: { annotations: PolygonAnnotation[]; nextId: number };
+    this.undoStack.update((s) => {
+      state = s.pop()!;
+      return [...s];
+    });
+    this.redoStack.update((s) => {
+      s.push(this._snapshot());
+      return [...s];
+    });
+    this.annotations.set(state!.annotations);
+    this._nextId = state!.nextId;
     this.clearSelection();
-    this.bumpHistory();
   }
 
   redo() {
     this._flushCommentDebounce();
     if (!this.canRedo()) return;
-    this.undoStack.push(this._snapshot());
-    const state = this.redoStack.pop()!;
-    this.annotations.set(state.annotations);
-    this._nextId = state.nextId;
+    let state: { annotations: PolygonAnnotation[]; nextId: number };
+    this.redoStack.update((s) => {
+      state = s.pop()!;
+      return [...s];
+    });
+    this.undoStack.update((s) => {
+      s.push(this._snapshot());
+      return [...s];
+    });
+    this.annotations.set(state!.annotations);
+    this._nextId = state!.nextId;
     this.clearSelection();
-    this.bumpHistory();
   }
 
-  // ── export / import ──
+  // export / import
 
   exportAnnotations() {
     const json = JSON.stringify(this.annotations(), null, 2);
-    navigator.clipboard.writeText(json).catch(() => { });
+    navigator.clipboard.writeText(json).catch(() => {});
   }
 
   async importAnnotations() {
@@ -518,20 +580,24 @@ export class App {
       const data = JSON.parse(text) as PolygonAnnotation[];
       if (!Array.isArray(data)) return;
       this.pushState();
-      this._nextId = Math.max(0, ...data.map(a => a.id)) + 1;
+      this._nextId = Math.max(0, ...data.map((a) => a.id)) + 1;
       this.annotations.set(data);
       this.clearSelection();
-    } catch { /* invalid json or clipboard read failed */ }
+    } catch {
+      /* invalid json or clipboard read failed */
+    }
   }
 
-  // ── helpers ──
+  // helpers
 
   private pointInPolygon(px: number, py: number, vertices: { x: number; y: number }[]): boolean {
     let inside = false;
     for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
-      const xi = vertices[i].x, yi = vertices[i].y;
-      const xj = vertices[j].x, yj = vertices[j].y;
-      if ((yi > py) !== (yj > py) && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) {
+      const xi = vertices[i].x,
+        yi = vertices[i].y;
+      const xj = vertices[j].x,
+        yj = vertices[j].y;
+      if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) {
         inside = !inside;
       }
     }
@@ -557,7 +623,8 @@ export class App {
     const { width: vw, height: vh } = this.videoDims();
     const x = (sx - vw / 2) / this.pixelsPerMeter;
     const y = (sy - vh / 2) / this.pixelsPerMeter;
-    const cos = Math.cos(cp.yaw), sin = Math.sin(cp.yaw);
+    const cos = Math.cos(cp.yaw),
+      sin = Math.sin(cp.yaw);
     return { worldX: x * cos - y * sin + cp.worldX, worldY: x * sin + y * cos + cp.worldY };
   }
 
@@ -565,13 +632,18 @@ export class App {
     const { width: vw, height: vh } = this.videoDims();
     const x = (wx - cp.worldX) * this.pixelsPerMeter;
     const y = (wy - cp.worldY) * this.pixelsPerMeter;
-    const cos = Math.cos(-cp.yaw), sin = Math.sin(-cp.yaw);
+    const cos = Math.cos(-cp.yaw),
+      sin = Math.sin(-cp.yaw);
     return { x: x * cos - y * sin + vw / 2, y: x * sin + y * cos + vh / 2 };
   }
 
   private polygonCentroid(verts: { worldX: number; worldY: number }[]) {
-    let cx = 0, cy = 0;
-    for (const v of verts) { cx += v.worldX; cy += v.worldY; }
+    let cx = 0,
+      cy = 0;
+    for (const v of verts) {
+      cx += v.worldX;
+      cy += v.worldY;
+    }
     return { worldX: cx / verts.length, worldY: cy / verts.length };
   }
 
