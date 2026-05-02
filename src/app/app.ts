@@ -121,55 +121,17 @@ export class App {
           ? 'rgba(200,200,255,0.5)'
           : 'rgba(255,0,0,0.7)';
       const strokeWidth = isSel ? 3 / ppm : 2 / ppm;
-
-      const hasHoles = a.holes.length > 0;
       return {
         annotationId: a.id,
-        type: hasHoles ? ('shape' as const) : ('line' as const),
-        config: hasHoles
-          ? {
-              sceneFunc: (ctx: any, shape: any) => {
-                const pts = a.worldVertices;
-                ctx.beginPath();
-                ctx.moveTo(pts[0].worldX, pts[0].worldY);
-                for (let i = 1; i < pts.length; i++)
-                  ctx.lineTo(pts[i].worldX, pts[i].worldY);
-                ctx.closePath();
-                for (const hole of a.holes) {
-                  ctx.moveTo(hole[0].worldX, hole[0].worldY);
-                  for (let i = 1; i < hole.length; i++)
-                    ctx.lineTo(hole[i].worldX, hole[i].worldY);
-                  ctx.closePath();
-                }
-                ctx.fillStrokeShape(shape);
-              },
-              hitFunc: (ctx: any, shape: any) => {
-                const pts = a.worldVertices;
-                ctx.beginPath();
-                ctx.moveTo(pts[0].worldX, pts[0].worldY);
-                for (let i = 1; i < pts.length; i++)
-                  ctx.lineTo(pts[i].worldX, pts[i].worldY);
-                ctx.closePath();
-                for (const hole of a.holes) {
-                  ctx.moveTo(hole[0].worldX, hole[0].worldY);
-                  for (let i = 1; i < hole.length; i++)
-                    ctx.lineTo(hole[i].worldX, hole[i].worldY);
-                  ctx.closePath();
-                }
-                ctx.fillStrokeShape(shape);
-              },
-              fillRule: 'evenodd',
-              fill,
-              stroke,
-              strokeWidth,
-            }
-          : {
-              points: a.worldVertices.flatMap((v) => [v.worldX, v.worldY]),
-              closed: true,
-              fill,
-              stroke,
-              strokeWidth,
-            },
+        type: 'shape' as const,
+        config: {
+          sceneFunc: (ctx: any, shape: any) =>
+            this._drawAnnotationPath(ctx, shape, a.worldVertices, a.holes),
+          fillRule: 'evenodd',
+          fill,
+          stroke,
+          strokeWidth,
+        },
       };
     });
   });
@@ -336,12 +298,7 @@ export class App {
               worldX: v.worldX + worldDx,
               worldY: v.worldY + worldDy,
             })),
-            holes: a.holes.map((hole) =>
-              hole.map((v) => ({
-                worldX: v.worldX + worldDx,
-                worldY: v.worldY + worldDy,
-              })),
-            ),
+            holes: this._translateHoles(a.holes, worldDx, worldDy),
           };
         }),
       );
@@ -623,12 +580,7 @@ export class App {
             worldX: v.worldX + worldDx,
             worldY: v.worldY + worldDy,
           })),
-          holes: a.holes.map((hole) =>
-            hole.map((v) => ({
-              worldX: v.worldX + worldDx,
-              worldY: v.worldY + worldDy,
-            })),
-          ),
+          holes: this._translateHoles(a.holes, worldDx, worldDy),
         };
       }),
     );
@@ -725,9 +677,9 @@ export class App {
       const text = await navigator.clipboard.readText();
       const data = JSON.parse(text) as any[];
       if (!Array.isArray(data)) return;
-      for (const a of data) {
+      data.forEach((a) => {
         if (!Array.isArray(a.holes)) a.holes = [];
-      }
+      });
       this.pushState();
       this._nextId = Math.max(0, ...data.map((a: any) => a.id)) + 1;
       this.annotations.set(data);
@@ -762,9 +714,7 @@ export class App {
             this.pushState();
             this.annotations.update((arr) =>
               arr.map((aa) =>
-                aa.id === a.id
-                  ? { ...aa, holes: [...aa.holes, deleteWorldVerts] }
-                  : aa,
+                aa.id === a.id ? { ...aa, holes: [...aa.holes, deleteWorldVerts] } : aa,
               ),
             );
             return;
@@ -775,7 +725,11 @@ export class App {
 
     // Fallback: unified difference on the full polygon (outer + holes)
     const toDelete: number[] = [];
-    const toReplace: { id: number; worldVertices: { worldX: number; worldY: number }[]; holes: { worldX: number; worldY: number }[][] }[] = [];
+    const toReplace: {
+      id: number;
+      worldVertices: { worldX: number; worldY: number }[];
+      holes: { worldX: number; worldY: number }[][];
+    }[] = [];
     const newAnnotations: PolygonAnnotation[] = [];
 
     for (const a of this.annotations()) {
@@ -787,21 +741,22 @@ export class App {
           a.worldVertices.map((v) => [v.worldX, v.worldY] as Pair),
           ...a.holes.map((h) => h.map((v) => [v.worldX, v.worldY] as Pair)),
         ];
-        const result: MultiPolygon = polygonClipping.difference([fullPolygon] as MultiPolygon, clipPolygon);
+        const result: MultiPolygon = polygonClipping.difference(
+          [fullPolygon] as MultiPolygon,
+          clipPolygon,
+        );
         if (result.length === 0) {
           toDelete.push(a.id);
         } else {
-          const newHoles: { worldX: number; worldY: number }[][] = [];
-          for (let hi = 1; hi < result[0].length; hi++) {
-            newHoles.push(this._ringToVertices(result[0][hi]));
-          }
-          toReplace.push({ id: a.id, worldVertices: this._ringToVertices(result[0][0]), holes: newHoles });
+          const newHoles = result[0].slice(1).map((r) => this._ringToVertices(r));
+          toReplace.push({
+            id: a.id,
+            worldVertices: this._ringToVertices(result[0][0]),
+            holes: newHoles,
+          });
           for (let i = 1; i < result.length; i++) {
             const newId = this._nextId++;
-            const splitHoles: { worldX: number; worldY: number }[][] = [];
-            for (let hi = 1; hi < result[i].length; hi++) {
-              splitHoles.push(this._ringToVertices(result[i][hi]));
-            }
+            const splitHoles = result[i].slice(1).map((r) => this._ringToVertices(r));
             newAnnotations.push({
               id: newId,
               worldVertices: this._ringToVertices(result[i][0]),
@@ -845,7 +800,10 @@ export class App {
         let overlapArea = 0;
         for (const poly of overlap) overlapArea += this._polygonArea(poly[0]);
         const ratio = overlapArea / newArea;
-        if (ratio > bestRatio) { bestRatio = ratio; bestId = a.id; }
+        if (ratio > bestRatio) {
+          bestRatio = ratio;
+          bestId = a.id;
+        }
       } catch {}
     }
     return bestRatio > 0.05 ? bestId : null;
@@ -907,6 +865,28 @@ export class App {
       },
     ]);
     return id;
+  }
+
+  private _translateHoles(holes: { worldX: number; worldY: number }[][], dx: number, dy: number) {
+    return holes.map((hole) => hole.map((v) => ({ worldX: v.worldX + dx, worldY: v.worldY + dy })));
+  }
+
+  private _drawAnnotationPath(
+    ctx: any,
+    shape: any,
+    verts: { worldX: number; worldY: number }[],
+    holes: { worldX: number; worldY: number }[][],
+  ) {
+    ctx.beginPath();
+    ctx.moveTo(verts[0].worldX, verts[0].worldY);
+    for (let i = 1; i < verts.length; i++) ctx.lineTo(verts[i].worldX, verts[i].worldY);
+    ctx.closePath();
+    for (const hole of holes) {
+      ctx.moveTo(hole[0].worldX, hole[0].worldY);
+      for (let i = 1; i < hole.length; i++) ctx.lineTo(hole[i].worldX, hole[i].worldY);
+      ctx.closePath();
+    }
+    ctx.fillStrokeShape(shape);
   }
 
   private _screenCoordsInStage(e: MouseEvent): { x: number; y: number } | null {
