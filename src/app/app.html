@@ -9,8 +9,12 @@
       ></video>
       <ko-stage #annotationStage [config]="videoDims()" [class.drawing-active]="isDrawingMode()" [class.dragging]="dragStartScreen() !== null" (mousedown)="handleMouseDown($event)">
         <ko-layer [config]="layerConfig()">
-          @for (p of polygonConfigs(); track $index) {
-            <ko-line [config]="p"></ko-line>
+          @for (p of polygonConfigs(); track p.annotationId) {
+            @if (p.type === 'shape') {
+              <ko-shape [config]="p.config"></ko-shape>
+            } @else {
+              <ko-line [config]="p.config"></ko-line>
+            }
           }
         </ko-layer>
         <ko-layer>
