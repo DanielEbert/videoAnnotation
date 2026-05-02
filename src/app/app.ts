@@ -250,7 +250,6 @@ export class App {
     const found = this.findAnnotationAtScreen(pos.x, pos.y);
     if (!found) return;
     e.preventDefault();
-    this._flushCommentDebounce();
     this.pushState();
     this.selectAnnotation(found.id);
     this._draggingAnnotationId = found.id;
@@ -587,7 +586,6 @@ export class App {
   }
 
   deleteAnnotation(id: number) {
-    this._flushCommentDebounce();
     this.pushState();
     if (this.selectedAnnotationId() === id) this.clearSelection();
     this.annotations.update((arr) => arr.filter((a) => a.id !== id));
@@ -598,7 +596,6 @@ export class App {
     if (isNaN(seconds)) return;
     const existing = this.annotations().find((x) => x.id === id);
     if (!existing || existing.timestamp === seconds) return;
-    this._flushCommentDebounce();
     this.pushState();
     this.annotations.update((arr) =>
       arr.map((a) => (a.id === id ? { ...a, timestamp: seconds } : a)),
@@ -623,6 +620,7 @@ export class App {
   }
 
   private pushState() {
+    this._flushCommentDebounce();
     this.undoStack.update((s) => {
       s.push(this._snapshot());
       if (s.length > this.MAX_HISTORY) s.shift();
@@ -691,6 +689,9 @@ export class App {
 
   // ── delete polygon (middle mouse) ──
 
+  // Delete-lasso: cuts the given polygon out of all annotations.
+  // Pass 1 — if the lasso is fully inside an annotation & misses all holes, add it as a new hole.
+  // Pass 2 — full polygonClipping.difference: delete annotations fully covered, replace/split the rest.
   private _applyDeletePolygon(deleteWorldVerts: { worldX: number; worldY: number }[]) {
     const clipPolygon = this._toPolygon(deleteWorldVerts);
 
